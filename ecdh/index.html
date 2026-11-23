@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#110f19">
-  <meta name="description" content="Follow Alice and Bob through elliptic-curve Diffie–Hellman on a 19-point toy curve, then see how TLS uses the same idea.">
+  <meta name="description" content="Learn ECDH from a toy elliptic curve, then trace real shared secrets through HKDF, smart cards, AES-GCM, and LUKS.">
   <title>ECDH — A Visual Guide to Key Agreement</title>
   <link rel="stylesheet" href="./lesson.css">
   <script type="module" src="./lesson.mjs"></script>
@@ -25,7 +25,7 @@
         <div>
           <p class="eyebrow">Elliptic-curve Diffie–Hellman</p>
           <h1>ECDH</h1>
-          <p class="hero-lead">How can Alice and Bob agree on a secret over a public channel? Follow the two public points they exchange and the calculation each side does in private.</p>
+          <p class="hero-lead">How can Alice and Bob agree on a secret over a public channel? Work the exchange on a tiny curve, then follow the shared bytes into HKDF, hardware-backed keys, and encrypted storage.</p>
           <a class="button" href="#exchange">Try the exchange</a>
         </div>
         <figure class="hero-figure">
@@ -45,17 +45,26 @@
     </div>
 
     <nav class="shell outline" aria-label="Guide sections">
-      <a href="#starting-point">What you need</a>
+      <a href="#starting-point">Fundamentals</a>
       <a href="#exchange">Exchange lab</a>
-      <a href="#why-it-works">Why it works</a>
-      <a href="#security">What keeps it secret</a>
-      <a href="#practice">In real protocols</a>
+      <a href="#why-it-works">The math</a>
+      <a href="#security">Peer trust</a>
+      <a href="#practice">Shared bytes</a>
+      <a href="#entropy">Entropy</a>
+      <a href="#hkdf">HKDF</a>
+      <a href="#smart-cards">Smart cards</a>
+      <a href="#object-keys">Object keys</a>
+      <a href="#aes-gcm">AES-GCM</a>
+      <a href="#luks">LUKS</a>
+      <a href="#threats">Threat model</a>
+      <a href="#review">Review</a>
     </nav>
 
     <div class="shell lesson">
       <section class="chapter" id="starting-point" aria-labelledby="starting-title">
-        <h2 id="starting-title">Start with a familiar public key</h2>
-        <p>If you know how an elliptic-curve public key is made, you have the prerequisite. A private key is a number <var>d</var>. A public key is a point <code>Q = dG</code>, where <var>G</var> is the public generator and <code>dG</code> means adding together <var>d</var> copies of <var>G</var>. For a refresher, see <a href="../ecdsa/#generators">point addition and scalar multiplication in the ECDSA guide</a>.</p>
+        <h2 id="starting-title">Agree on a secret in public</h2>
+        <p>Suppose two programs want to encrypt a conversation, but their network traffic is visible to everyone. Sending a freshly generated AES key would reveal it. ECDH lets each program use a private input and a public message from its peer to calculate the same secret locally. This is <strong>key agreement</strong>. Encryption is a separate operation that can use a key derived from the result.</p>
+        <p>Think of a point as a position on a grid that follows a curve equation. The curve also comes with a rule for adding two points to get another point. A private key is a secret integer <var>d</var>, called a <strong>scalar</strong>. Its public key is a point <code>Q = dG</code>. The public generator <var>G</var> is an agreed starting point, and <code>dG</code> means adding <var>d</var> copies of it using the curve’s addition rule. See the <a href="../ecdsa/#generators">ECDSA guide</a> for a visual introduction to point addition and scalar multiplication.</p>
         <p>ECDSA uses that key relationship to sign and verify messages. ECDH uses it to establish shared key material. Each party starts by creating a key pair, then applies the same multiplication operation again using the <em>other party’s public point</em> as the starting point.</p>
         <div class="curve-spec" role="group" aria-label="Toy curve parameters">
           <div><span>Curve equation</span><code>y² ≡ x³ + 2x + 2 (mod 17)</code></div>
@@ -152,7 +161,7 @@
 
         <h3>Where each modulus belongs</h3>
         <dl class="moduli">
-          <div><dt>Coordinates use <code>mod p</code></dt><dd>The point-addition formulas work in the field of size <code>p = 17</code>. For example, doubling <code>B = (9, 16)</code> uses slope <code>(3·9² + 2)/(2·16) ≡ 5 (mod 17)</code>. Division here means multiplying by the denominator’s inverse in that field.</dd></div>
+          <div><dt>Coordinates use <code>mod p</code></dt><dd>The point-addition formulas work in the field of size <code>p = 17</code>. For example, doubling <code>B = (9, 16)</code> uses slope <code>(3·9² + 2)/(2·16) ≡ 5 (mod 17)</code>. Division here means multiplying by the denominator’s inverse in that field. The denominator <code>32</code> reduces to <code>15</code> and <code>15·8 ≡ 1 (mod 17)</code>, so its inverse is 8. With slope <code>m = 5</code>, the doubled point has coordinates <code>x′ = m² − 2·9 ≡ 7</code> and <code>y′ = m(9 − x′) − 16 ≡ 11</code>. Each coordinate is reduced mod 17.</dd></div>
           <div><dt>Counts of <var>G</var> wrap <code>mod n</code></dt><dd>Since <code>19G = 𝒪</code>, every extra 19 copies of <var>G</var> bring you back to the same point. The shared point is <code>35G = (35 mod 19)G = 16G</code>. This is a check you can make because the example gives you both private scalars.</dd></div>
         </dl>
         <details class="check-yourself">
@@ -165,7 +174,7 @@
       <section class="chapter" id="security" aria-labelledby="security-title">
         <h2 id="security-title">What keeps the shared point secret?</h2>
         <p>A passive observer has <var>G</var>, <var>A</var>, and <var>B</var>. The task of finding <code>(ab)G</code> from those three points is the <strong>computational Diffie–Hellman problem</strong>. One possible route is to recover <var>a</var> from <code>A = aG</code>, which is the <strong>elliptic-curve discrete logarithm problem</strong>, and then compute <code>aB</code>. ECDH assumes computing the shared point from public information is infeasible for the chosen group and properly generated keys.</p>
-        <p>On our toy curve, an observer could try all 18 private scalars and find the one whose public point matches Alice’s. Real curves have vastly larger groups, and real implementations generate private keys with a cryptographically secure random source.</p>
+        <p>Think of a clock whose stops have arbitrary names. Counting forward with the rule is easy. Seeing a stop’s name gives no simple subtraction operation to recover the count. On our 19-point curve, an observer can still try all 18 private scalars. Real curves have vastly larger groups, and real implementations generate private keys with a cryptographically secure random source. <a href="#search-cost">The search-cost walkthrough</a> shows why an attack can be much faster than trying every scalar.</p>
         <div class="callout">
           <h3>What if someone changes a public point?</h3>
           <p>A valid point can belong to anyone. If someone can substitute public keys in transit, Alice and Bob can each establish a different secret with that intermediary. In a certificate-authenticated TLS handshake, the server signs the handshake transcript (which includes the exchanged key shares). The client verifies the signature and certificate to bind the exchange to the expected server.</p>
@@ -173,20 +182,391 @@
       </section>
 
       <section class="chapter" id="practice" aria-labelledby="practice-title">
-        <h2 id="practice-title">From shared point to session keys</h2>
+        <h2 id="practice-title">What an ECDH API returns</h2>
+        <p>Alice and Bob agreed on a point. Software needs bytes. A curve and protocol specify which coordinate to keep, how many bytes to write, and in which order. Think of it as a file format for the result of a calculation.</p>
+        <figure class="walkthrough">
+          <ol class="flow">
+            <li><strong>Shared point</strong><code>(10, 11)</code></li>
+            <li><strong>Select the coordinate</strong><code>x = 10</code></li>
+            <li><strong>Encode at field width</strong><code>0a</code></li>
+          </ol>
+          <figcaption>Our toy field fits in one byte. In a 32-byte big-endian field, the value 10 would use 31 zero bytes followed by <code>0a</code>. Those leading bytes are part of the format.</figcaption>
+        </figure>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="ECDH output formats">
+          <table>
+            <thead><tr><th scope="col">Choice</th><th scope="col">Raw shared bytes</th><th scope="col">Public input</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">P-256</th><td>32-byte big-endian <var>x</var></td><td>Go accepts <code>04 || x || y</code>, 65 bytes.</td></tr>
+              <tr><th scope="row">P-384</th><td>48-byte big-endian <var>x</var></td><td>Go accepts <code>04 || x || y</code>, 97 bytes.</td></tr>
+              <tr><th scope="row">secp256k1</th><td>32-byte big-endian <var>x</var> with SEC 1 ECDH</td><td>Short Weierstrass like P-256, with different parameters. Check the API. Go’s standard <code>crypto/ecdh</code> has no secp256k1 support.</td></tr>
+              <tr><th scope="row">X25519</th><td>32-byte little-endian Montgomery <var>u</var></td><td>A 32-byte <var>u</var>-coordinate, used by the X25519 function with a clamped scalar.</td></tr>
+              <tr><th scope="row">X448</th><td>56-byte little-endian Montgomery <var>u</var></td><td>A 56-byte <var>u</var>-coordinate on a different curve. Go’s standard <code>crypto/ecdh</code> has no X448 support.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><code>||</code> means concatenate. Big-endian puts the most significant byte first. Little-endian puts the least significant byte first. The Montgomery <var>u</var>-coordinate plays a role analogous to <var>x</var> on the short Weierstrass curves. X25519 adjusts specific bits of the private input before multiplication, a step called clamping. A different prefix, byte order, or width changes the subsequent KDF input. Check the contract before interoperating with an API that returns a full point, wraps the bytes, or hashes them internally. <a href="https://www.secg.org/sec1-v2.pdf">SEC 1 §3.3.1</a> · <a href="https://www.secg.org/sec2-v2.pdf">SEC 2 curve parameters</a> · <a href="https://www.rfc-editor.org/rfc/rfc7748#section-5">RFC 7748 §5</a> · <a href="https://pkg.go.dev/crypto/ecdh">Go crypto/ecdh</a></p>
+
+        <h3>Read the shared value in Go</h3>
+        <p>With Go’s standard X25519 implementation, start with your own generated key <code>private</code> and the public bytes you received from a peer. Parse the peer before doing the exchange. The function returns the agreed bytes or an error.</p>
+        <pre><code>peer, err := ecdh.X25519().NewPublicKey(peerBytes)
+if err != nil {
+    return nil, fmt.Errorf("parse peer: %w", err)
+}
+shared, err := private.ECDH(peer)
+if err != nil {
+    return nil, fmt.Errorf("perform X25519: %w", err)
+}
+return shared, nil // 32 bytes for a successful X25519 exchange</code></pre>
+        <p>The <a href="./storage-demo.go" download>complete software example</a> generates both key pairs with <code>GenerateKey(rand.Reader)</code> and checks both results. It reports the length without printing the secret.</p>
+
+        <h3>Validation and identity are two different checks</h3>
+        <p>For short Weierstrass ECDH, validate the encoding and check that coordinates are in range and on the specified curve, the point is nonidentity, and subgroup membership holds where required. On the cofactor-one curves P-256 and P-384, all finite on-curve points are in the intended prime-order group. Go’s <code>NewPublicKey</code> handles the NIST-curve point checks. For X25519, the RFC specifies a u-coordinate-only function with its own decoding rules. Go’s <code>NewPublicKey</code> checks the length and <code>ECDH</code> rejects an all-zero shared output, which can occur with a low-order input. Separately authenticate or authorize the peer key under the application’s rules. A well-formed public key can still belong to an adversary. <a href="https://csrc.nist.gov/pubs/sp/800/56/a/r3/final">NIST SP 800-56A Rev. 3 §5.6</a> · <a href="https://www.rfc-editor.org/rfc/rfc7748#section-6.1">RFC 7748 §6.1</a> · <a href="https://pkg.go.dev/crypto/ecdh#Curve">Go public-key validation</a></p>
+
+        <h3>From shared bytes to session keys</h3>
+        <p>The result is <strong>input keying material</strong>, secret bytes from which a protocol can derive the exact keys it needs. TLS 1.3 feeds the encoded shared value into its HKDF key schedule. Transcript hashes and labels help bind keys to the handshake and separate traffic in each direction.</p>
+        <p>In <strong>ECDHE</strong>, the last letter stands for <em>ephemeral</em>. Each peer generates a fresh exchange key pair. After both peers erase the ephemeral private keys and session secrets, compromise of a long-term signing key alone leaves earlier sessions protected. This is <strong>forward secrecy</strong>. The long-lived storage key later in this guide has a different goal: it must stay usable for old ciphertext. <a href="https://www.rfc-editor.org/rfc/rfc9846.html">RFC 9846, TLS 1.3 key schedule and ECDH</a></p>
+        <details class="check-yourself">
+          <summary>Check your understanding</summary>
+          <p>Why can’t you feed a 65-byte P-256 public key to AES? What if the shared output is 32 bytes?</p>
+          <p>The 65 bytes encode a public point and fail AES’s length check. A 32-byte shared output fits AES-256’s interface, but the protocol still needs to decide how to validate, derive, and use that key.</p>
+        </details>
+      </section>
+
+      <section class="chapter" id="entropy" aria-labelledby="entropy-title">
+        <h2 id="entropy-title">Count the possibilities, then weigh them</h2>
+        <p>Imagine drawing one of four numbered cards from a bag. Printing each number in two bits tells you how to label the cards. To predict the draw, you also need to know how many copies of each card are in the bag. A key’s byte length is the label width. Its probability distribution tells you which labels an attacker should try first.</p>
+        <figure class="walkthrough" id="distribution">
+          <fieldset class="choices" id="distribution-options" hidden>
+            <legend>Compare guessing probabilities</legend>
+            <label><input type="radio" name="distribution" value="biased" checked> Biased draw</label>
+            <label><input type="radio" name="distribution" value="uniform"> Uniform draw</label>
+          </fieldset>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Two-bit probability distribution">
+            <table>
+              <thead><tr><th scope="col">Value</th><th scope="col">Probability in the selected draw</th><th scope="col">Chance by this guess</th></tr></thead>
+              <tbody>
+                <tr><th scope="row"><code>00</code></th><td><div class="probability"><meter min="0" max="1" value=".5" aria-hidden="true"></meter><span>50%</span></div></td><td>50%</td></tr>
+                <tr><th scope="row"><code>01</code></th><td><div class="probability"><meter min="0" max="1" value=".25" aria-hidden="true"></meter><span>25%</span></div></td><td>75%</td></tr>
+                <tr><th scope="row"><code>10</code></th><td><div class="probability"><meter min="0" max="1" value=".125" aria-hidden="true"></meter><span>12.5%</span></div></td><td>87.5%</td></tr>
+                <tr><th scope="row"><code>11</code></th><td><div class="probability"><meter min="0" max="1" value=".125" aria-hidden="true"></meter><span>12.5%</span></div></td><td>100%</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <figcaption id="distribution-result" role="status">Biased draw: four possible values, 1.75 bits of Shannon entropy, and 1 bit of min-entropy.</figcaption>
+        </figure>
+        <dl class="moduli">
+          <div><dt>Shannon entropy</dt><dd>Average surprise. An outcome of probability <var>q</var> has surprise <code>−log₂(q)</code> bits. The weighted average here is <code>½·1 + ¼·2 + ⅛·3 + ⅛·3 = 1.75</code> bits.</dd></div>
+          <div><dt>Min-entropy</dt><dd>Surprise of the most likely outcome. The first guess wins with probability <code>q<sub>max</sub> = ½</code>, so min-entropy is <code>−log₂(½) = 1</code> bit. A uniform draw has 2 bits by both measures and a 25% first-guess chance.</dd></div>
+        </dl>
+        <p>The <strong>support</strong> is the set of values with nonzero probability. The support size tells you how many possibilities exist. In the table, try the values from most to least likely. The last column gives the cumulative chance of success after trying that row and all rows above it. Neither entropy measure is a count of operations required by a particular attack. An attacker also needs a way to produce useful guesses and recognize success, such as a valid AES-GCM tag. Always ask what the attacker already knows. <a href="https://csrc.nist.gov/pubs/sp/800/90/b/final">NIST SP 800-90B, min-entropy and guessing probability</a></p>
+
+        <h3>What a uniform AES key buys you</h3>
+        <p>For a uniform AES-256 key, every 256-bit string is equally likely. With guessing only, trying <var>m</var> distinct keys covers exactly <code>m / 2²⁵⁶</code> of the distribution. Bias can put more probability on the first few guesses. A known fixed bit, for example, halves the candidate space without making it small. A small mathematical bias may have little practical effect, especially when finding or testing the favored keys is hard.</p>
+        <dl class="terms">
+          <div><dt>Statistical uniformity</dt><dd>All strings have exactly equal probability. Statistical closeness measures the size of the deviation, even for an observer with unlimited computation.</dd></div>
+          <div><dt>Computational pseudorandomness</dt><dd>Within the security model, a feasible observer cannot reliably tell the output from random. The set of outputs can still be smaller than the entire space.</dd></div>
+          <div><dt>Unpredictability and attack cost</dt><dd>Guessing the exact key is different from distinguishing its distribution. Recovering a key, distinguishing outputs, and breaking an enclosing protocol can each have different costs.</dd></div>
+        </dl>
+        <p><strong>Kerckhoffs’s principle</strong> tells us to assume the attacker knows the algorithms and public metadata. Uniform keys give the attacker no preferred candidates in the ideal key-guessing model. A good KDF aims to give applications pseudorandom keys under stated assumptions, without depending on hiding the derivation.</p>
+
+        <h3 id="reachable-keys">Four secrets in a 256-key space</h3>
+        <p>Give a toy system only four equiprobable source values <code>00</code> through <code>03</code> in hexadecimal. An eight-bit key can represent 256 values. Compare zero-padding the source with a public lookup that scatters the same four inputs across the space.</p>
+        <figure class="walkthrough" id="mapping">
+          <fieldset class="choices" id="mapping-options" hidden>
+            <legend>Show the reachable key values</legend>
+            <label><input type="radio" name="mapping" value="direct" checked> Direct mapping</label>
+            <label><input type="radio" name="mapping" value="mixed"> Toy KDF mapping</label>
+          </fieldset>
+          <div id="keyspace-grid" class="keyspace" aria-hidden="true" hidden></div>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Toy input to key mappings">
+            <table>
+              <thead><tr><th scope="col">Source</th><th scope="col">Direct byte</th><th scope="col">Toy KDF byte</th></tr></thead>
+              <tbody>
+                <tr><th scope="row"><code>00</code></th><td><code>00</code></td><td><code>7b</code></td></tr>
+                <tr><th scope="row"><code>01</code></th><td><code>01</code></td><td><code>d2</code></td></tr>
+                <tr><th scope="row"><code>02</code></th><td><code>02</code></td><td><code>1f</code></td></tr>
+                <tr><th scope="row"><code>03</code></th><td><code>03</code></td><td><code>a4</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <figcaption id="mapping-result" role="status">Direct mapping: 4 of 256 keys are reachable.</figcaption>
+        </figure>
+        <p><strong>The general rule.</strong> Fix all public inputs and call the deterministic derivation <code>K = f(Z)</code>, where <var>Z</var> is the secret byte string and <var>K</var> is the key. Every possible <var>Z</var> leads to one <var>K</var>. Multiple inputs can also lead to the same key. The reachable-key set can only stay the same size or shrink. For someone who knows the four reachable bytes, membership in that set distinguishes this toy output from a uniform byte. A uniform byte lands there only 4 times out of 256 on average. Output probabilities for colliding inputs add together, so the best first guess can only stay as good or get better. Shannon entropy cannot rise either: learning the output cannot tell you more about the outcome than learning the entire input.</p>
+        <p>If a hypothetical source has exactly <code>2¹²⁸</code> possible values, and they are efficiently enumerable, the attacker can derive each candidate key and test it. Even with 256-bit outputs there are at most <code>2¹²⁸</code> candidates. HKDF adds a small cost per candidate. It supplies neither new secret randomness nor a password-stretching work factor. Hashing a guessable password with HKDF still lets the attacker test likely guesses cheaply. Where a password is the source, a password KDF such as Argon2id increases the cost of each guess. If a fresh salt is public, the same reasoning applies after the attacker sees that salt. <a href="https://www.rfc-editor.org/rfc/rfc9106">RFC 9106, Argon2</a></p>
+
+        <h3 id="search-cost">P-256 attack cost is a different number</h3>
+        <p>The P-256 group has about <code>2²⁵⁶</code> points. For a fixed valid nonidentity peer point, multiplying by a uniformly chosen nonzero scalar runs through all nonidentity points. Encoding only <var>x</var> pairs each point with its negative, so the coordinate support is roughly <code>2²⁵⁵</code>. This counts possible values across generated keys. It makes no claim about what an observer can efficiently calculate for one recorded exchange.</p>
+        <div class="proof" role="group" aria-label="Toy point collision">
+          <div class="alice"><span>First expression</span><code>2A + G = 15G</code></div>
+          <div class="bob"><span>Second expression</span><code>A + 8G = 15G</code></div>
+        </div>
+        <p>Here <code>A = aG</code> from the lab. If a search finds those two expressions land on the same point, their coefficients give <code>2a + 1 ≡ a + 8 (mod 19)</code>, so <code>a = 7</code>. The search can compare points without knowing <var>a</var>. Pollard rho uses a pseudorandom walk with tracked coefficients to find a collision, like looking for a shared birthday among many pairs of people. In a group of order <var>n</var>, a useful collision takes on the order of <code>√n</code> group operations in the generic model. Recovering a private scalar this way and multiplying by the other public point breaks that exchange.</p>
+        <p>The roughly <code>2¹²⁸</code> classical work factor for P-256 comes from this square-root scale. X25519 is also commonly described as targeting about 128-bit classical security, with a different group and parameters. The overall system can be weaker if a key is guessable, an endpoint leaks it, or the protocol exposes a cheaper attack. Deriving a 32-byte AES key does not change the curve’s work factor. For fixed public shares the correct result is already determined mathematically. Its secrecy is computational. <a href="https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final">NIST SP 800-57 Part 1 Rev. 5, Table 2</a> · <a href="https://www.rfc-editor.org/rfc/rfc7748#section-4.1">RFC 7748 §4.1</a> · <a href="https://doi.org/10.1090/S0025-5718-1978-0491431-9">Pollard’s collision method</a></p>
+        <details class="check-yourself">
+          <summary>Check your understanding</summary>
+          <p>A 32-byte key is derived from four equiprobable secrets using a fixed public KDF. How many keys are reachable? What is the attacker’s best chance on the first guess?</p>
+          <p>At most four keys are reachable. The best guess succeeds with at least 25% probability if the attacker knows the source distribution and can compute the outputs. A collision can make that probability higher.</p>
+        </details>
+      </section>
+
+      <section class="chapter" id="hkdf" aria-labelledby="hkdf-title">
+        <h2 id="hkdf-title">Turn shared material into purpose-specific keys</h2>
+        <p>Imagine a recipe that makes one base mixture, then uses separate instructions to make each finished product. A KDF gives software a similar interface. It takes the shared material and produces the number of bytes each consumer expects under a distinct label.</p>
+        <figure class="walkthrough">
+          <ol class="flow">
+            <li><strong>Input keying material</strong><span>Use the agreed bytes <var>Z</var>.</span></li>
+            <li><strong>Extract</strong><span>Use HMAC with the salt to get a pseudorandom key, called <var>PRK</var>.</span></li>
+            <li><strong>Expand</strong><span>Use <var>PRK</var>, the context label, and the requested length to get output keying material, called <var>OKM</var>.</span></li>
+          </ol>
+        </figure>
+        <p><strong>HMAC</strong> uses a hash function and a key to compute a digest of a message. A hash takes any-length input and returns a fixed-size digest. HMAC defines how to incorporate a key and behaves like a keyed pseudorandom function under standard assumptions when the key is suitable. During Extract the salt occupies HMAC’s key input even though it can be public. During Expand the secret <var>PRK</var> occupies the key input. <a href="https://www.rfc-editor.org/rfc/rfc2104">RFC 2104, HMAC</a> · <a href="https://www.rfc-editor.org/rfc/rfc5869#section-2">RFC 5869 §2</a></p>
+
+        <h3>The two operations</h3>
+        <pre><code>PRK = HMAC(salt, Z)
+T(0) = empty
+T(i) = HMAC(PRK, T(i − 1) || info || byte(i))
+OKM = first L bytes of T(1) || T(2) || …</code></pre>
+        <p><var>i</var> is a counter starting at 1, encoded as one byte. Each block <code>T(i)</code> includes the previous block and the same <code>info</code> label. With SHA-256, each block is 32 bytes, so a 32-byte AES key takes one block. The limit is 255 blocks, or 8160 bytes with SHA-256. Output length truncates the same stream, so the 16-byte result is a prefix of the 32-byte result for identical inputs and label. Use distinct labels if the outputs are meant for different purposes.</p>
+        <p><strong>Toy trace.</strong> Suppose a pretend two-byte HMAC returns <code>2a 91</code> in Extract. With label <code>enc</code>, let the first block be <code>b0 74</code> and the second be <code>35 9c</code>. A request for three bytes takes <code>b0 74 35</code>. The second block’s message starts with <code>b0 74</code> and ends with counter <code>02</code>. These made-up bytes illustrate the assembly. The next example computes the actual digests.</p>
+
+        <details class="check-yourself" open>
+          <summary>A real HKDF-SHA-256 trace</summary>
+          <p>Use the public X25519 test vector from RFC 7748 §6.1 as <var>Z</var>, a nil salt, the UTF-8 label <code>object-storage-key-v1</code>, and 32 bytes of output. With one block, <var>OKM</var> equals <code>HMAC(PRK, info || 01)</code>. These published inputs make the key public and suitable for testing only.</p>
+          <dl class="vectors">
+            <div><dt>Shared bytes <var>Z</var></dt><dd><code>4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742</code></dd></div>
+            <div><dt>Extract output <var>PRK</var></dt><dd><code>fd5b81e5379cfe3599ea059945250eabdb0913b8c3ae8bd85d6b735f15538be5</code></dd></div>
+            <div><dt>Expand output <var>OKM</var></dt><dd><code>45975bdb01d4c58a07a4c0fd32f8beaa2b635f0fce84e392017d334a1a7d6cbc</code></dd></div>
+          </dl>
+          <p>The <a href="./storage-demo.go" download>runnable Go example</a> also checks this result. <a href="https://www.rfc-editor.org/rfc/rfc7748#section-6.1">RFC 7748 §6.1 vector</a></p>
+        </details>
+
+        <h3>Salt and info have different jobs</h3>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="HKDF salt and info choices">
+          <table>
+            <thead><tr><th scope="col">Input</th><th scope="col">Role</th><th scope="col">How to reproduce it</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Absent salt</th><td>RFC 5869 uses a hash-length string of zero bytes. This is 32 zeros with SHA-256.</td><td>Specify <code>nil</code> in this version of the format.</td></tr>
+              <tr><th scope="row">Fixed salt</th><td>A constant for the extraction step. It gives a fixed extraction function.</td><td>Keep the exact bytes in the format specification.</td></tr>
+              <tr><th scope="row">Independent random salt</th><td>Can strengthen extraction guarantees and diversify the output across instances. It can be public.</td><td>Store it alongside the ciphertext or recover it from an agreed source.</td></tr>
+              <tr><th scope="row"><code>info</code></th><td>Context for Expand, such as protocol, purpose, version, or identifiers. Use an unambiguous encoding.</td><td>Recover exactly the same context bytes on decrypt.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Same shared bytes, salt, info, hash, and length give the same key. With <code>nil</code> salt, this step makes no random draw and needs no salt database. A constant purpose label such as <code>object-storage-key-v1</code> still keeps these bytes separate from keys derived under another label. Protocols can require other choices. For example, modern OpenPGP X25519 specifies absent salt but includes both public keys and the shared secret in the HKDF input, with its own label and an AES key-wrap step. Use the exact protocol format when interoperating. <a href="https://www.rfc-editor.org/rfc/rfc5869#section-3">RFC 5869 §3</a> · <a href="https://www.rfc-editor.org/rfc/rfc9580#section-5.1.6">RFC 9580 §5.1.6</a></p>
+        <pre><code>key, err := hkdf.Key(sha256.New, sharedSecret, nil, "object-storage-key-v1", 32)
+if err != nil {
+    return err
+}</code></pre>
+        <p>This is the Go 1.24+ standard-library API. <code>info</code> is a string, so use <code>""</code> for absent info. The storage program supplies complete error handling and derives a second key under a different label. <a href="https://pkg.go.dev/crypto/hkdf#Key">Go crypto/hkdf.Key</a></p>
+
+        <h3>Can raw ECDH bytes be an AES key?</h3>
+        <p>From AES’s point of view, every 32-byte string is a valid AES-256 key. Direct use can be defensible in a narrowly reviewed design with a fixed curve and API, validated output, adequate secret quality, a single well-defined use, and no protocol requirement for a KDF. That design accepts dependence on the raw coordinate representation and its distribution. Omitting HKDF does not by itself make properly generated X25519 output cheaply guessable.</p>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="Three ways to use ECDH output">
+          <table>
+            <thead><tr><th scope="col">Pipeline</th><th scope="col">What it provides</th><th scope="col">If the source is guessable</th></tr></thead>
+            <tbody>
+              <tr><th scope="row"><code>Z → AES</code></th><td>Uses the raw representation. Its length must match the AES key size exactly. Repeated <var>Z</var> gives a repeated key.</td><td>Try candidate bytes directly.</td></tr>
+              <tr><th scope="row"><code>Z → SHA-256 → AES</code></th><td>Gives a consistent 32-byte output. This bare hash has no built-in context encoding, multi-key schedule, or HKDF extraction contract.</td><td>Hash each candidate, then test it.</td></tr>
+              <tr><th scope="row"><code>Z → HKDF → AES</code></th><td>Standardized extraction for input such as DH output, selectable length, and purpose separation. Under suitable source and HMAC assumptions, keys for distinct contexts can be treated as pseudorandom.</td><td>Run HKDF for each candidate, then test it.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>HKDF’s concrete benefits are a well-studied key schedule and the ability to prevent accidental key reuse across contexts. In a single-purpose system with a strong, fixed source, some of these benefits may be small. HKDF still cannot authenticate a peer, repair a publicly computable <var>Z</var>, or lift the attack cost above a cheaper break of the ECDH exchange. Use the chosen protocol’s KDF and validation rules, including any compliance requirements. <a href="https://www.rfc-editor.org/rfc/rfc5869#section-3.3">RFC 5869 §3.3, Extract and DH inputs</a> · <a href="https://csrc.nist.gov/pubs/sp/800/56/c/r2/final">NIST SP 800-56C Rev. 2</a></p>
+      </section>
+
+      <section class="chapter" id="smart-cards" aria-labelledby="card-title">
+        <h2 id="card-title">Move the private key into a smart card</h2>
+        <p>Think of the card as a calculator that takes a public point and uses a stored private scalar. The host can request a calculation without reading the scalar. It still receives the result, and in this design it uses that result for key derivation and encryption.</p>
+        <figure class="walkthrough">
+          <ol class="flow boundary">
+            <li><strong>Host sends</strong><span>Encode the peer public key inside a card command.</span><code>A6 { 7F49 { 86 { peer } } }</code></li>
+            <li><strong>Card computes</strong><span>Use the configured decipher key to multiply the peer point.</span><code>PSO: DECIPHER</code></li>
+            <li><strong>Host receives</strong><span>Read the response bytes, validate them, then derive and use an AES key.</span><code>Z → HKDF → AES</code></li>
+          </ol>
+          <figcaption>The public point crosses into the card. The shared bytes cross out of it. An on-card, non-exportable private scalar stays inside.</figcaption>
+        </figure>
+
+        <h3>What the pinned Go library actually does</h3>
         <ol class="protocol">
-          <li><strong>Check the peer’s key share.</strong> For the short Weierstrass curves used by TLS, the peer point must have in-range coordinates, lie on the chosen curve, and differ from the identity. Validation rules depend on the group and protocol.</li>
-          <li><strong>Compute and encode the shared value.</strong> For such curves, TLS encodes the shared point’s <var>x</var>-coordinate as fixed-width bytes. With X25519, public shares and the shared output are encoded Montgomery <var>u</var>-coordinates. TLS aborts if the X25519 shared output is all zero.</li>
-          <li><strong>Derive the keys needed by the protocol.</strong> TLS 1.3 feeds the shared value into its HKDF key schedule. The schedule also uses handshake transcript hashes and labels to derive separate traffic secrets and keys for each direction.</li>
+          <li><strong>Get the decipher-key handle.</strong> Open the OpenPGP applet, select an already provisioned decipher key, and match its public key to a trusted copy. <code>*openpgp.PrivateKeyECDH</code> is a handle for the operation.</li>
+          <li><strong>Prepare the peer key.</strong> Use the curve’s <code>NewPublicKey</code> parser. <code>PrivateKeyECDH.ECDH</code> also checks that the peer curve matches the configured curve.</li>
+          <li><strong>Send the command.</strong> Version <code>v0.3.11</code> nests <code>peer.Bytes()</code> in the external public-key object <code>86</code>, public-key object <code>7F49</code>, and cipher object <code>A6</code>. It sends <code>PSO: DECIPHER</code> with instruction <code>2A</code> and parameters <code>80 86</code>. This request is an APDU, the message unit used between a host and a card. The normal default is the decipher slot; the optional Manage Security Environment command can switch the active key on supporting cards.</li>
+          <li><strong>Read the shared bytes.</strong> The library passes through the response data on success. It applies no KDF, point conversion, output-length check, or all-zero check. OpenPGP Card 3.4.1 §7.2.11 describes the uncompressed <code>04 || x || y</code> input for conventional curves and returns the shared secret. The pinned package tests compare card output byte-for-byte with Go ECDH on P-256, P-384, P-521, and X25519 using YubiKey 5.4.3 fixtures. For those profiles this means fixed-width big-endian <var>x</var> for the NIST curves and raw 32-byte little-endian <var>u</var> for X25519. The X25519 fixture also sends a bare 32-byte peer key. The conventional point-format paragraph alone does not specify this X25519 behavior for every card.</li>
         </ol>
-        <p>For the toy point <code>(10, 11)</code>, the field element <code>x = 10</code> would fit in one byte, <code>0a</code> in hexadecimal. Encoding preserves the coordinate’s value. It stays within the field of size <var>p</var> and is fed into key derivation as bytes.</p>
-        <p>In <strong>ECDHE</strong>, the last letter stands for <em>ephemeral</em>. Each peer generates a fresh key pair for the exchange and discards the private material when it’s no longer needed. With authenticated ephemeral exchange and proper erasure of session secrets, later compromise of a long-term signing key leaves past sessions protected. This is <strong>forward secrecy</strong>.</p>
-        <h3>Further reading</h3>
-        <ul class="sources">
-          <li><a href="https://csrc.nist.gov/pubs/sp/800/56/a/r3/final">NIST SP 800-56A Rev. 3, key agreement and public-key validation</a></li>
-          <li><a href="https://www.rfc-editor.org/rfc/rfc7748#section-6.1">RFC 7748 §6.1, the X25519 exchange and a test vector</a></li>
-          <li><a href="https://www.rfc-editor.org/rfc/rfc9846.html">RFC 9846, TLS 1.3 authentication, key schedule, and ECDH</a></li>
-        </ul>
+        <p><a href="https://pkg.go.dev/cunicu.li/go-openpgp-card@v0.3.11#PrivateKeyECDH.ECDH">Pinned Go API</a> · <a href="https://proxy.golang.org/cunicu.li/go-openpgp-card/@v/v0.3.11.zip">Pinned source and fixtures</a> · <a href="https://www.gnupg.org/ftp/specs/OpenPGP-smart-card-application-3.4.1.pdf#page=68">OpenPGP Smart Card 3.4.1 §7.2.11</a> · <a href="https://docs.yubico.com/hardware/yubikey/yk-tech-manual/yk5-apps-openpgp.html">YubiKey OpenPGP algorithm support</a></p>
+
+        <h3>What the hardware boundary protects</h3>
+        <p>On-card key generation can keep the long-term scalar out of host backups, process memory, and logs. A key imported from software already existed outside that boundary. The ECDH response, derived AES key, and decrypted plaintext all enter host memory in this example. Malware on a host can copy those values or make requests to an unlocked card. Card PIN and touch requirements control use according to model and configuration. They do not give the card an understanding of which object the caller is authorized to decrypt.</p>
+        <p>A card that evaluates ECDH on inputs chosen by a caller is an <strong>oracle</strong> for those evaluations. Restrict access and authorize requests before giving untrusted callers control of them. For Weierstrass curves, validate peers in the host and use firmware that validates inputs at the card boundary as well. The fixed card scalar must not be applied to arbitrary invalid points. For X25519, enforce the defined input format and reject an all-zero output even if the card returns success. Validate the expected width for every profile. Validate on actual hardware and firmware before relying on the wire format and operation policy.</p>
+        <p>The <a href="./card-demo.go" download>smart-card Go example</a> accepts an existing reader connection and a pinned card public key. It selects the applet, verifies the decipher PIN, calls ECDH, checks the result, and derives a purpose-specific key. Compile it alongside <code>storage-demo.go</code> in a separate Go module after adding <code>cunicu.li/go-openpgp-card@v0.3.11</code> with <code>go get</code>. The selected device must expose its decipher public key so the example can check it against the trusted copy. The card flow was checked against the source and recorded fixtures, without a live reader. This page’s software demo runs independently.</p>
+        <p>The card command is a primitive. Historical OpenPGP ECDH uses the RFC 6637-style KDF and AES key wrap outside the card. RFC 9580 retains that construction for the classic ECDH algorithm and specifies a different schedule for its native X25519 packet algorithm. A custom nil-salt storage example does not produce an OpenPGP message. <a href="https://www.rfc-editor.org/rfc/rfc6637#section-8">RFC 6637 §8</a> · <a href="https://www.rfc-editor.org/rfc/rfc9580#section-11.5">RFC 9580 §11.5</a></p>
+      </section>
+
+      <section class="chapter" id="object-keys" aria-labelledby="object-title">
+        <h2 id="object-title">Reproduce an object’s key without storing a salt</h2>
+        <p>Reproducibility means restoring a saved ciphertext with the same derivation inputs. It helps to think of those inputs as part of the file format. The card key, peer value, curve, encoding, and derivation parameters must all agree with the version used to write the object.</p>
+        <figure class="walkthrough">
+          <ol class="flow">
+            <li><strong>Resolve the object’s peer</strong><span>Use stored public bytes or a specified mapping from known metadata.</span></li>
+            <li><strong>Agree with the card</strong><span>The same card private key and same peer value give the same <var>Z</var>.</span></li>
+            <li><strong>Derive for this purpose</strong><span>Apply the same HKDF hash, salt rule, info bytes, and output length.</span></li>
+          </ol>
+          <figcaption>Different peer inputs generally give different secrets. Coordinate-only outputs and peer encodings can have equivalences. Explicit object context makes the design independent of relying on uniqueness from the point mapping alone.</figcaption>
+        </figure>
+        <p>Object separation answers “Which object is this key for?” Purpose separation answers “What may use it?” If each object already has its own independently generated peer input, repeating the object ID in HKDF is less important for producing distinct keys, but binding the expected ID in authenticated data can prevent swapping objects between records. A fixed, versioned HKDF label is still useful. Encryption and a separate message-authentication function should derive different keys, even for the same object. AES-GCM already authenticates its ciphertext and AAD, so it needs no additional MAC for that job.</p>
+
+        <div class="callout critical" id="public-scalar">
+          <h3>A public peer scalar defeats the hardware boundary</h3>
+          <p>Suppose the peer scalar <var>d</var><sub>object</sub> comes from a public hash of the plaintext or an object ID, mapped into the valid scalar range. The hardware scalar is <var>d</var><sub>hardware</sub>. Their public points are <code>P_object = d_object · G</code> and <code>P_hardware = d_hardware · G</code>.</p>
+          <div class="proof" role="group" aria-label="Two ways to reach the same shared point">
+            <div class="alice"><span>Card knows its own scalar</span><code>d_hardware · P_object<br>= (d_hardware · d_object)G</code></div>
+            <div class="bob"><span>Observer knows or guesses the object scalar</span><code>d_object · P_hardware<br>= (d_object · d_hardware)G</code></div>
+          </div>
+          <p>The integer products are equal, so both calculations yield the same point and the same encoded bytes. On the toy curve, use hardware scalar 7 with public point <code>(0, 6)</code>. Let a public mapping give the object scalar 5, with object point <code>(9, 16)</code>. The card computes <code>7(9, 16) = (10, 11)</code>. Anyone who knows 5 computes <code>5(0, 6) = (10, 11)</code>. Try it using the <a href="#exchange">exchange sliders</a>.</p>
+          <p>Imagine storing a signed standard-form letter with just two plausible versions. Someone who knows the template can compute the public mapping for both candidate documents. A stored peer public key can confirm a guess directly, and an authentication tag can confirm the matching derived key. Once someone knows or guesses the scalar, the public hardware key gives them the shared bytes without the card. HKDF sees the same inputs on both paths, so it yields the same AES key.</p>
+        </div>
+
+        <h3>How will decryption get the peer value?</h3>
+        <p>If decryption needs the plaintext to reconstruct the peer key, the process is circular. Store the peer public key with the ciphertext, or derive it from a stable identifier already available to the decryptor. Publishing an ID or point is compatible with many key-agreement designs. Publishing enough information for anyone to reconstruct a peer <em>private</em> scalar is what causes the failure above. A public hash of a small plaintext dictionary also leaks information even if the hash is labeled an identifier.</p>
+
+        <h3>Three designs and what each depends on</h3>
+        <dl class="terms">
+          <div><dt>Random ephemeral peer; store its public key</dt><dd>To encrypt, generate a fresh random peer scalar, compute ECDH with the trusted recipient public key, and keep only the public share with the ciphertext. The recipient card can reproduce the shared secret years later from the public share. This requires per-object public metadata but no saved HKDF salt. The encryptor knows the secret during encryption. Anyone with the recipient’s public key can create their own new encrypted objects, so authenticate the writer separately if needed. For production public-key encryption, a reviewed format such as HPKE specifies peer/transcript binding and authenticated variants. Use a card integration that supports the selected suite. <a href="https://www.rfc-editor.org/rfc/rfc9180">RFC 9180, HPKE</a></dd></div>
+          <div><dt>Stable secret plus a public object ID</dt><dd>If a protected secret source is already available, expand purpose- and object-specific keys under that secret using a versioned, unambiguous context. A card can recompute a base secret from a fixed, independently generated peer point whose scalar was kept private during setup and then destroyed. A holder of the base secret can derive every object key in that domain. If the hardware instead offers a reviewed keyed derivation service, use its specified interface. A public ID is safe as a label and supplies no secrecy.</dd></div>
+          <div><dt>Standardized hash-to-curve; evaluate a point with unknown discrete log</dt><dd>RFC 9380 specifies how to map bytes to a curve point, using field mappings and suite-specific subgroup handling. A recipient of that point can recompute it from a known message but, on the real curve under the intended assumptions, has no efficient way to recover a scalar relating it to <var>G</var>. This removes the known-scalar shortcut. An RFC 9380 suite specifies the mapping, while authorization, ECDH encoding, output derivation, and the storage security model still need design and review. Verify that the card accepts the selected curve, point form, subgroup, and output representation. In particular a suite producing an Edwards point is not a drop-in X25519 input. A card oracle that evaluates the target point for an attacker still defeats the design. <a href="https://www.rfc-editor.org/rfc/rfc9380#section-8">RFC 9380 §8, suites</a> · <a href="https://www.rfc-editor.org/rfc/rfc9497">RFC 9497, a reviewed protocol using hash-to-curve</a></dd></div>
+        </dl>
+        <details class="check-yourself">
+          <summary>Check your understanding</summary>
+          <p>Which design lets an encryptor use only the recipient’s public key while keeping a guessable plaintext confidential? What should it save?</p>
+          <p>A fresh random ephemeral peer, under a suitable public-key encryption protocol. Save the ephemeral public share, version and recipient key identifier, and whatever the encryption format needs to recover the nonce and authenticate the metadata. An attacker who guesses the plaintext still lacks the ephemeral scalar and the card scalar.</p>
+        </details>
+      </section>
+
+      <section class="chapter" id="aes-gcm" aria-labelledby="gcm-title">
+        <h2 id="gcm-title">Encrypt the object with AES-GCM</h2>
+        <p>The AES key is a secret that can stay the same while a file is updated. Think of the nonce as a public serial number for one encryption under that key. GCM uses it to start encryption in a different state. The serial number travels with the encrypted object.</p>
+        <dl class="terms">
+          <div><dt>Key</dt><dd>AES accepts 16, 24, or 32 bytes. This example requires 32 bytes explicitly. These correspond to AES-128, AES-192, and AES-256.</dd></div>
+          <div><dt>Nonce or IV</dt><dd>GCM uses an initialization vector as a nonce. A common size is 12 bytes. A nonce must be unique for every encryption under the same key, with carefully bounded collision risk if generated randomly.</dd></div>
+          <div><dt>Ciphertext and authentication tag</dt><dd>Encryption hides the plaintext. The tag lets decryption reject changes to the ciphertext or authenticated metadata. Check it before consuming any plaintext.</dd></div>
+          <div><dt>Additional authenticated data (AAD)</dt><dd>Bytes kept in the clear but bound by the tag. Authenticate the version, key identifier, and peer share. Bind the expected object ID from the caller’s trusted record when you need to prevent cross-object swapping.</dd></div>
+        </dl>
+        <figure class="walkthrough">
+          <div class="record" role="group" aria-label="On-disk object format in byte order">
+            <span><strong>Version</strong><small>1 byte</small></span>
+            <span><strong>Recipient key ID</strong><small>32 bytes</small></span>
+            <span><strong>Peer public key</strong><small>32 bytes</small></span>
+            <span><strong>Nonce</strong><small>12 bytes</small></span>
+            <span><strong>Ciphertext</strong><small>variable</small></span>
+            <span><strong>Tag</strong><small>16 bytes</small></span>
+          </div>
+          <figcaption>The first three fields are the authenticated header in the software example. The expected object ID is supplied separately as AAD. The nonce is read from the record, so there is no external nonce database.</figcaption>
+        </figure>
+        <p><strong>Encrypt</strong> by generating a fresh peer key for a new record, deriving the AES key, then sealing with a fresh random nonce. <strong>Decrypt</strong> by parsing the header, choosing the pinned recipient key, validating the peer, reproducing the AES key, and authenticating the record with the expected AAD. A different version, ID, key, or tag should yield an error. In a card-backed deployment only the recipient-side multiplication moves onto the card.</p>
+        <p>Reusing a nonce under the same GCM key reuses the encryption keystream. Comparing the two ciphertexts exposes the XOR of the two plaintexts, and the reuse can also enable tag forgery. Different keys have separate nonce spaces. A rewrite, retry, or restored snapshot can reuse an object’s key, so relying on “one encryption per object” is brittle. Go’s <code>NewGCMWithRandomNonce</code> generates and prepends a 96-bit nonce and extracts it during <code>Open</code>. Its contract limits usage to at most <code>2³²</code> encryptions per key. <a href="https://csrc.nist.gov/pubs/sp/800/38/d/final">NIST SP 800-38D §§8 and A</a> · <a href="https://pkg.go.dev/crypto/cipher#NewGCMWithRandomNonce">Go GCM nonce API</a></p>
+        <p>Other modes fit different problems. CTR provides confidentiality with a unique counter stream and needs separate authentication. CBC needs a suitable IV and separate authentication. AES-SIV can encrypt deterministically and preserve integrity, with equality leakage for repeated plaintext and AAD under one key. AES-GCM-SIV still takes a nonce and is designed to limit damage from accidental repeats. With a repeated nonce it can reveal equality for identical inputs. Prefer fresh nonces even there unless a reviewed deterministic scheme is an explicit requirement. Disk encryption commonly uses XTS, which has a different job. <a href="https://csrc.nist.gov/pubs/sp/800/38/a/final">NIST SP 800-38A</a> · <a href="https://www.rfc-editor.org/rfc/rfc5297">RFC 5297, AES-SIV</a> · <a href="https://www.rfc-editor.org/rfc/rfc8452">RFC 8452, AES-GCM-SIV</a></p>
+
+        <div class="example">
+          <h3>Run the software walkthrough with Go 1.24+</h3>
+          <p>Download <a href="./storage-demo.go" download>storage-demo.go</a> and run <code>go run storage-demo.go</code>. It checks both sides of a real X25519 exchange, the published-input HKDF trace, length and low-order handling, stable and purpose-separated keys, a fresh peer for a second object, AES-GCM round trips and tamper rejection, the known-scalar equality, and both LUKS derivation lengths. It also seals the same plaintext twice under one key and compares the public nonces. It prints checks and lengths. Fresh private keys and derived secrets stay out of its output.</p>
+          <details>
+            <summary>Read the encryption and decryption calls</summary>
+            <pre><code>// Construct a cipher with aes.NewCipher(key), then aead with
+// cipher.NewGCMWithRandomNonce(block). Check both errors.
+body := aead.Seal(nil, nil, plaintext, aad) // nonce || ciphertext || tag
+plaintext, err := aead.Open(nil, nil, body, aad)
+if err != nil {
+    return fmt.Errorf("authenticate object: %w", err)
+}</code></pre>
+            <p>The nonce argument is nil because this specific Go API packs a fresh nonce into the body. The full example builds and validates the header before calling <code>Open</code>. This teaching format is independent of OpenPGP and HPKE.</p>
+          </details>
+        </div>
+      </section>
+
+      <section class="chapter" id="luks" aria-labelledby="luks-title">
+        <h2 id="luks-title">Unlock a LUKS volume with derived bytes</h2>
+        <p>Imagine a safe with several locks. Each lock opens access to the same contents. A <strong>LUKS keyslot</strong> is like one lock. A passphrase or binary key file provides the credential for that slot. The <strong>volume key</strong> is what the disk-encryption layer uses on every sector.</p>
+        <figure class="walkthrough">
+          <ol class="flow">
+            <li><strong>Passphrase or key file</strong><span>Supply a string or opaque bytes.</span></li>
+            <li><strong>Keyslot KDF and unlock</strong><span>Use the header’s slot-specific salt and KDF parameters to unlock the protected volume key.</span></li>
+            <li><strong>Disk encryption</strong><span>Use the volume key with the device’s cipher and sector tweak scheme.</span></li>
+          </ol>
+          <figcaption>The LUKS header describes the format, data segment, cipher, and keyslots. Multiple slots can recover the same volume key with different credentials.</figcaption>
+        </figure>
+        <p>A binary key file is read as credential bytes. Preserve them exactly, with no hex encoding or trailing newline unless that is how the keyslot was set up. A LUKS2 slot commonly uses Argon2 or PBKDF2 according to its configuration. Its salt and cost parameters are managed in the LUKS metadata. Using nil salt in the application’s HKDF leaves these slot parameters intact. <a href="https://gitlab.com/cryptsetup/cryptsetup/-/blob/main/FAQ.md">cryptsetup FAQ, key files and keyslots</a> · <a href="https://gitlab.com/cryptsetup/LUKS2-docs/-/tree/main">LUKS2 on-disk format</a></p>
+
+        <h3>Two ways to use ECDH with LUKS</h3>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="LUKS credential and volume-key approaches">
+          <table>
+            <thead><tr><th scope="col">Question</th><th scope="col">A. Reproduce a keyslot credential</th><th scope="col">B. Reproduce the volume key</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">What does HKDF make?</th><td>For example, 32 bytes with a versioned, per-volume keyslot label.</td><td>The exact cipher key. For AES-256-XTS, 64 bytes with a distinct per-volume label.</td></tr>
+              <tr><th scope="row">Where do the bytes go?</th><td>Enroll them as a keyslot credential and provide them with <code>--key-file</code> to unlock. LUKS generates its volume key in the usual setup.</td><td>Supply <code>--volume-key-file</code> at initial format to choose the volume key. Set the cipher and key size to match. On a supported open operation, the same option supplies the volume key directly.</td></tr>
+              <tr><th scope="row">What must survive?</th><td>The original header and a suitable keyslot or matching header backup, plus the encrypted sectors and derivation inputs. A secondary recovery slot can cover card loss.</td><td>The original derived bytes or their inputs, the encrypted sectors, and matching cipher, sector and data-offset parameters. Keep the header and a backup even when you can reproduce the raw key.</td></tr>
+              <tr><th scope="row">How does rotation work?</th><td>While access still works, enroll a new credential in a separate slot, verify recovery, then retire the old slot. Old header backups may restore old access.</td><td>Changing the derivation changes the disk key. The sectors must be re-encrypted or the data migrated. A leaked volume key cannot be revoked by changing a slot.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><strong>AES-XTS in numbers.</strong> XTS uses two AES keys. One encrypts the data blocks, and the other helps generate the tweak for the data-unit number. A sector number is like a position label, so blocks at different locations are processed differently. AES-256-XTS means two 256-bit keys, hence <code>--key-size 512</code> and 64 raw bytes. It does not mean 512-bit security. XTS provides storage confidentiality without a GCM-style authentication tag. Sector location and mapping parameters matter during recovery. <a href="https://csrc.nist.gov/pubs/sp/800/38/e/final">NIST SP 800-38E, XTS-AES</a></p>
+        <details>
+          <summary>See the cryptsetup arguments for each approach</summary>
+          <p>These are alternative examples for <strong>new disposable image files</strong>. Formatting writes a new header and can destroy access to existing data. For an existing volume, enroll a new slot using <code>luksAddKey</code> and an existing authorized credential. The Go example derives the two kinds of bytes in memory. These commands assume the respective secure binary file already exists.</p>
+          <pre><code># A: the bytes go into the first keyslot as a credential
+cryptsetup luksFormat --type luks2 --key-file slot.bin ./new-slot.img
+cryptsetup open --type luks --test-passphrase --key-file slot.bin ./new-slot.img
+
+# B: choose the actual 64-byte volume key and protect a slot with a prompted credential
+cryptsetup luksFormat --type luks2 --cipher aes-xts-plain64 --key-size 512 \
+  --volume-key-file volume.bin ./new-volume.img
+cryptsetup open --type luks --test-passphrase --volume-key-file volume.bin ./new-volume.img</code></pre>
+          <p>Treat both binary files as secrets. In particular, possession of the raw volume key bypasses keyslot protection. <a href="https://gitlab.com/cryptsetup/cryptsetup/-/blob/main/man/cryptsetup-luksFormat.8.adoc">luksFormat</a> · <a href="https://gitlab.com/cryptsetup/cryptsetup/-/blob/main/man/cryptsetup-open.8.adoc">open</a> · <a href="https://gitlab.com/cryptsetup/cryptsetup/-/blob/main/man/common_options.adoc">cryptsetup options</a></p>
+        </details>
+        <p>In most cases the goal is to unlock the <em>existing</em> volume without retaining a separate derivation salt. Approach A meets that goal while preserving normal LUKS recovery slots. A fresh format normally creates a different random volume key even if the credential is unchanged. Approach B can reproduce the old raw key, but recreating a compatible mapping requires the original geometry and cipher settings, and overwritten headers or data sectors cannot be reconstructed from a key. Back up the header with <code>luksHeaderBackup</code> and keep a separate data backup. A header backup plus a credential valid at backup time can retain access after slot changes, so protect old copies. A lost or damaged card with no recovery slot, backup key, or other access path can make the volume unrecoverable. <a href="https://gitlab.com/cryptsetup/cryptsetup/-/blob/main/man/cryptsetup-luksHeaderBackup.8.adoc">luksHeaderBackup</a> · <a href="https://gitlab.com/cryptsetup/cryptsetup/-/blob/main/FAQ.md">cryptsetup recovery FAQ</a></p>
+        <details class="check-yourself">
+          <summary>Check your understanding</summary>
+          <p>You know the deterministic keyslot credential from A. The device was reformatted with that same credential. Can you recover the old sectors using the new header?</p>
+          <p>The new slot unlocks the new random volume key. Old ciphertext needs the original volume key and matching parameters. A matching header backup and the relevant credential can recover that key, provided the original encrypted data is intact.</p>
+        </details>
+      </section>
+
+      <section class="chapter" id="threats" aria-labelledby="threat-title">
+        <h2 id="threat-title">Evaluate a design from the attacker’s side</h2>
+        <p>Start with an observer who knows all the algorithms and public metadata. Then ask what changes if they can submit inputs, control the host, or break recovery. The cheapest available route determines the practical security.</p>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="Storage threat model and consequences">
+          <table>
+            <thead><tr><th scope="col">Scenario</th><th scope="col">Type</th><th scope="col">Consequence and response</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Known or guessable object</th><td>Practical attack on public-scalar designs</td><td>The observer can derive or guess the peer scalar and reproduce the key from the public card key. A random ephemeral scalar or suitable protected secret source removes that path.</td></tr>
+              <tr><th scope="row">Known algorithms, card public key, peer key, and encrypted record</th><td>Expected exposure</td><td>Public values are part of the security model. For honest random peers, the observer still faces the ECDH assumption. Length and unencrypted metadata can leak information. Authenticate the metadata and limit what the format exposes.</td></tr>
+              <tr><th scope="row">Caller chooses a peer, or substitutes one in transit</th><td>Practical if access or authentication is missing</td><td>A chosen public key can have a scalar the caller knows. Bind the intended recipient, authorize the peer or object, and authenticate the exchange where required. Recipient public-key encryption alone does not prove who wrote an object.</td></tr>
+              <tr><th scope="row">Card used as an ECDH oracle</th><td>Practical under compromised host or excessive access</td><td>A caller who gets the card to evaluate the target share receives the secret. PIN, touch, isolation, and access policy reduce exposure. A compromised host can also read outputs during authorized operations.</td></tr>
+              <tr><th scope="row">Malformed or low-order peer</th><td>Implementation and protocol security risk</td><td>Validate the encoding and curve-specific inputs, use validating firmware, and reject all-zero X25519 output. A predictable output can destroy confidentiality and invalid-point handling can endanger a reused scalar.</td></tr>
+              <tr><th scope="row">Wrong key length or altered encoding</th><td>Integration failure</td><td>Compare exact lengths before derivation and use. Preserve width, byte order, and version. Reject rather than silently truncating or padding an incompatible result.</td></tr>
+              <tr><th scope="row">Same object is encrypted repeatedly</th><td>Design trade-off</td><td>Repeat the derivation when needed but give each GCM encryption under that key a fresh nonce. An AEAD alone does not prevent replay or rollback of an older authenticated record.</td></tr>
+              <tr><th scope="row">GCM nonce reused with the same key</th><td>Practical cryptographic failure</td><td>Plaintext relations leak and authentication can break. Use a managed uniqueness policy or a reviewed misuse-resistant mode when appropriate.</td></tr>
+              <tr><th scope="row">Card lost, damaged, rotated, or compromised</th><td>Operational risk and possible confidentiality loss</td><td>Keep recoverable key versions or a deliberately provisioned recovery path. Rewrap stored data keys or migrate before retiring the old key. Later compromise of a static recipient scalar exposes recorded shares for that scalar.</td></tr>
+              <tr><th scope="row">Curve, library, or algorithm changes</th><td>Compatibility and migration risk</td><td>Version the suite, metadata encoding, salt convention, and labels. Check fixed vectors and retain the old reader or migrate data. The same private input on a different suite need not reproduce old keys.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="chapter" id="review" aria-labelledby="review-title">
+        <h2 id="review-title">Common misconceptions</h2>
+        <p>Predict each answer before opening it. The examples above give you the reasoning for each case.</p>
+        <div class="review">
+          <details><summary>Does a 32-byte ECDH result give 256-bit security?</summary><p>Its size is the encoded field width. Roughly 128-bit classical security for curves such as P-256 comes from known attack costs. System security can be weaker than either the curve or AES.</p></details>
+          <details><summary>Can HKDF turn 128 bits of entropy into 256 bits?</summary><p>For fixed public inputs, a deterministic function maps each secret to one output. An output can be 256 bits wide while the underlying uncertainty stays the same or decreases.</p></details>
+          <details><summary>Must an attacker guess all 256-bit AES keys after HKDF?</summary><p>If the attacker can efficiently enumerate plausible sources, they can derive and test those keys instead. An attack that recovers a private scalar can bypass key guessing entirely.</p></details>
+          <details><summary>Does HKDF work because the derivation is hidden?</summary><p>The algorithm, format, and context labels can all be public. Security rests on secret input and the properties of the cryptographic functions and protocol.</p></details>
+          <details><summary>Does any bias make key guessing practical?</summary><p>Guessing depends on the probability mass an attacker can reach and test with their budget. A known fixed bit changes the ideal guess space by a factor of two. A secret chosen from four known values changes it far more.</p></details>
+          <details><summary>Does P-256 have only 2¹²⁸ shared secrets?</summary><p>The group has about 2²⁵⁶ points. The coordinate has roughly half as many possible encodings. Generic discrete-log attacks work on a square-root scale, which is where the 128-bit estimate comes from.</p></details>
+          <details><summary>Does rebuilding the same AES key require identical ciphertext?</summary><p>A fresh GCM nonce yields a different encryption under the same key. In the software demo a new peer scalar and each encryption nonce draw randomness. Re-derivation from old public bytes and a fixed salt rule does not.</p></details>
+          <details><summary>Does a public object-derived point force an attacker to use the card?</summary><p>If the attacker can recover the scalar behind that point, they multiply the card’s public key by it. A standardized hash-to-curve point instead aims to hide that scalar even when the message and point are public.</p></details>
+          <details><summary>Is a LUKS key file the disk-encryption key?</summary><p>A normal key file unlocks a slot. That slot gives access to the volume key. Only an explicitly supplied raw volume key, such as with <code>--volume-key-file</code>, goes directly into the volume-key role.</p></details>
+          <details><summary>Where does a hash-to-curve scheme still need access control?</summary><p>Anyone can map the object ID to a point. Someone who can send that target point to the unlocked card and read its result can reproduce the same key. The mapping alone cannot enforce who may decrypt.</p></details>
+        </div>
       </section>
     </div>
   </main>

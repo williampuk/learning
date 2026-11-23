@@ -136,3 +136,48 @@ byId("reset").addEventListener("click", () => {
 
 render();
 lab.hidden = false;
+
+const distributionOptions = byId("distribution-options");
+const distributionRows = [...byId("distribution").querySelectorAll("tbody tr")];
+
+function renderDistribution(value) {
+  const uniform = value === "uniform";
+  const probabilities = uniform ? [25, 25, 25, 25] : [50, 25, 12.5, 12.5];
+  let cumulative = 0;
+
+  distributionRows.forEach((row, index) => {
+    const probability = probabilities[index];
+    cumulative += probability;
+    row.querySelector("meter").value = probability / 100;
+    row.querySelector(".probability span").textContent = `${probability}%`;
+    row.cells[2].textContent = `${cumulative}%`;
+  });
+
+  byId("distribution-result").textContent = uniform
+    ? "Uniform draw: four possible values, 2 bits of Shannon entropy, and 2 bits of min-entropy."
+    : "Biased draw: four possible values, 1.75 bits of Shannon entropy, and 1 bit of min-entropy.";
+}
+
+distributionOptions.addEventListener("change", (event) => renderDistribution(event.target.value));
+renderDistribution(distributionOptions.querySelector(":checked").value);
+distributionOptions.hidden = false;
+
+const mappingOptions = byId("mapping-options");
+const keyspace = byId("keyspace-grid");
+const mappingRows = [...byId("mapping").querySelectorAll("tbody tr")];
+const cells = Array.from({ length: 256 }, () => document.createElement("span"));
+keyspace.append(...cells);
+
+function renderKeyspace(value) {
+  const mixed = value === "mixed";
+  const column = mixed ? 2 : 1;
+  const reachable = new Set(mappingRows.map((row) => parseInt(row.cells[column].textContent, 16)));
+  cells.forEach((cell, index) => cell.classList.toggle("reachable", reachable.has(index)));
+  const label = mixed ? "Toy KDF mapping" : "Direct mapping";
+  byId("mapping-result").textContent = `${label}: ${reachable.size} of 256 keys are reachable.`;
+}
+
+mappingOptions.addEventListener("change", (event) => renderKeyspace(event.target.value));
+renderKeyspace(mappingOptions.querySelector(":checked").value);
+mappingOptions.hidden = false;
+keyspace.hidden = false;
