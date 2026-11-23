@@ -20,16 +20,3 @@ Update or verify the root `index.html` in the same change whenever you add, revi
 4. Keep category headings and the topics within each category in alphabetical order. Update links and descriptions when they change. Remove a category section if it has no topics left. The empty-state message appears automatically when there are no category sections.
 5. Verify that the directory link opens the topic, its return link opens the directory, and referenced assets load from their relative paths. Preview through a static HTTP server and include the repository path prefix when checking links.
 
-## CodeGraph
-
-If a `.codegraph/` directory exists at the repository root, use CodeGraph before searching or reading source files to understand or locate code. Prefer the `codegraph_explore` MCP tool when available. Name a file or symbol to read its current line-numbered source. The shell equivalent is `codegraph explore "<symbol names or question>"`. If the repository has no `.codegraph/` directory, skip CodeGraph and leave indexing to the user.
-
-## Current developer documentation
-
-When the task asks about a library, framework, SDK, API, CLI tool, or cloud service, use Context7 for current API syntax, setup, configuration, migrations, and library-specific debugging. Skip it for refactoring, scripts written from scratch, business logic debugging, code review, and general programming concepts.
-
-1. Run `npx ctx7@latest library <name> "<specific question>"` with the official name. Skip this step if the user supplies the library ID.
-2. Choose the best `/org/project` match based on the name, description, examples, source reputation, and benchmark. Use a version-specific ID from the results when needed.
-3. Run `npx ctx7@latest docs <libraryId> "<specific question>"` for each distinct concept, combining concepts when their interaction is the question. Use the fetched documentation in your answer.
-
-Run no more than three Context7 commands per question and keep credentials out of queries. Run Context7 outside Codex's default sandbox. If a sandboxed call fails with a DNS or network error, rerun it outside the sandbox. If a call hits a quota, tell the user and suggest `npx ctx7@latest login` or setting `CONTEXT7_API_KEY`.
