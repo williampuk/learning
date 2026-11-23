@@ -1,0 +1,965 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#110f19">
+  <meta name="description" content="Learn ECDSA and secp256k1 from modular arithmetic through signing, verification, recovery, and real transaction formats.">
+  <title>ECDSA on secp256k1 — A Visual Guide</title>
+  <link rel="stylesheet" href="./lesson.css">
+  <script type="module" src="./lesson.mjs"></script>
+</head>
+<body id="top">
+  <a class="skip" href="#main">Skip to the lessons</a>
+  <header class="site-header">
+    <div class="shell topbar">
+      <a class="brand" href="../"><span class="mark" aria-hidden="true">∿</span>Interactive Learning</a>
+      <nav class="header-links" aria-label="Quick links">
+        <a class="contents-link" href="#contents">Contents</a>
+        <a href="#signing-lab">Signing lab</a>
+        <a class="wide-link" href="#reference">Reference</a>
+      </nav>
+    </div>
+    <div class="reading-progress" aria-hidden="true"></div>
+  </header>
+  <div class="hero-frame">
+    <div class="shell hero">
+      <div class="hero-copy">
+        <p class="eyebrow">A visual guide to digital signatures</p>
+        <h1>ECDSA <span>on secp256k1</span></h1>
+        <p>Start with arithmetic on a clock. Finish by signing, verifying, and recovering a public key by hand, then follow the same mathematics into Bitcoin, Ethereum, and hardware signing.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="#why-sign">Start with Alice’s wallet</a>
+          <a class="button" href="#signing-lab">Try the signing lab</a>
+        </div>
+      </div>
+      <figure class="hero-plot">
+        <div class="plot-head"><span class="figure-kicker">The toy curve</span><span>y² = x³ + 2x + 2 mod 17</span></div>
+        <canvas id="hero-curve" data-size="600 385" role="img" aria-label="The 18 valid affine points of the toy curve. G is (5, 1), Q is (0, 6), and R is (3, 1).">See the complete point table in Chapter 7.</canvas>
+        <figcaption class="plot-foot"><span>18 affine points + 𝒪</span><span>G (5, 1) · Q (0, 6) · R (3, 1)</span></figcaption>
+      </figure>
+    </div>
+  </div>
+  <dl class="shell entry-strip">
+    <div><dt>Prerequisites</dt><dd>Programming and high-school algebra</dd></div>
+    <div><dt>Running example</dt><dd>One 19-point curve you can compute by hand</dd></div>
+    <div><dt>Practice</dt><dd>8 experiments and a capstone</dd></div>
+  </dl>
+
+  <main class="shell layout" id="main" tabindex="-1">
+    <aside class="outline" id="contents" aria-labelledby="contents-title">
+      <h2 id="contents-title">Contents</h2>
+      <nav aria-label="Parts of the guide">
+        <a href="#foundations">I. Mathematical foundations</a>
+        <a href="#toy-curve">II. The toy curve</a>
+        <a href="#signing">III. Signing</a>
+        <a href="#verification">IV. Verification</a>
+        <a href="#recovery">V. Public key recovery</a>
+        <a href="#low-s">VI. Low-S and malleability</a>
+        <a href="#nonce-security">VII. Nonce security</a>
+        <a href="#applications">VIII. secp256k1 in practice</a>
+        <a href="#capstone">Capstone</a>
+        <a href="#reference">Glossary and reference</a>
+      </nav>
+      <details class="chapter-index">
+        <summary>All 29 chapters</summary>
+        <ol>
+          <li><a href="#why-sign">What ECDSA solves</a></li>
+          <li><a href="#modular">Modular arithmetic</a></li>
+          <li><a href="#ordinary-curves">Ordinary elliptic curves</a></li>
+          <li><a href="#point-law">Why addition works</a></li>
+          <li><a href="#finite-curves">Finite-field curves</a></li>
+          <li><a href="#generators">Groups and generators</a></li>
+          <li><a href="#running-example">The 19-point curve</a></li>
+          <li><a href="#keys">Private and public keys</a></li>
+          <li><a href="#digest">From message to digest</a></li>
+          <li><a href="#nonce">The nonce</a></li>
+          <li><a href="#signature">Deriving a signature</a></li>
+          <li><a href="#check-signature">Verifying a signature</a></li>
+          <li><a href="#verification-proof">Verification proof</a></li>
+          <li><a href="#recover-key">Recovering a key</a></li>
+          <li><a href="#parity">Two Y coordinates</a></li>
+          <li><a href="#recovery-id">Recovery IDs and Ethereum</a></li>
+          <li><a href="#s-boundary">High-S and Low-S</a></li>
+          <li><a href="#s-proof">Why both forms verify</a></li>
+          <li><a href="#malleability">Signature malleability</a></li>
+          <li><a href="#key-secrecy">What stays secret</a></li>
+          <li><a href="#nonce-leak">A revealed nonce</a></li>
+          <li><a href="#nonce-reuse">A reused nonce</a></li>
+          <li><a href="#deterministic">Deterministic signing</a></li>
+          <li><a href="#parameters">Real curve parameters</a></li>
+          <li><a href="#key-encoding">Public key encodings</a></li>
+          <li><a href="#signature-encoding">Signature encodings</a></li>
+          <li><a href="#bitcoin">Bitcoin signing</a></li>
+          <li><a href="#ethereum">Ethereum signing</a></li>
+          <li><a href="#hsm">HSM signing</a></li>
+        </ol>
+      </details>
+    </aside>
+
+    <div class="lesson">
+      <noscript><p class="callout">The chapters, point table, and solutions are available here. Enable JavaScript to run the experiments and draw the plots.</p></noscript>
+      <section class="part" id="foundations" aria-labelledby="foundations-title">
+        <p class="part-number">Part I</p>
+        <h2 id="foundations-title">Mathematical foundations</h2>
+        <p class="part-lead">Start with the job a signature has to do. Then build the arithmetic and point operations that make public verification possible.</p>
+
+        <section class="chapter" id="why-sign">
+          <h3><span class="chapter-number">01</span> What problem does ECDSA solve?</h3>
+          <p>Alice wants to pay Bob in Bitcoin. She proposes a transaction spending an output locked to a key she controls. Bob and the network need evidence that someone who controls the key authorized this particular spend. If Alice shared the private key, anyone who received it could make a different payment. If she used a password that everyone could check directly, every verifier would know it too.</p>
+          <p>A digital signature gives Alice a different way to prove control. She generates a <strong>private key</strong> that stays secret and a related <strong>public key</strong> she can share. Signing consumes her private key and the message. Checking consumes the public key, the message, and the signature. Both sides must agree on the exact bytes the signature should cover.</p>
+          <ol class="flow" aria-label="Alice and Bob's signing flow">
+            <li><strong>Alice prepares</strong><span>Choose the inputs, recipients, and amounts covered by the signature.</span></li>
+            <li><strong>Alice signs</strong><span>Hash the agreed bytes and use the secret key to produce a signature.</span></li>
+            <li><strong>Bob checks</strong><span>Rebuild the digest and test the signature with Alice’s public key.</span></li>
+            <li><strong>Nodes enforce</strong><span>Apply the transaction and spending rules to decide whether to accept it.</span></li>
+          </ol>
+          <p><strong>Authentication</strong> here means evidence of control of a cryptographic key. Connecting that key to a person takes separate evidence. <strong>Authorization</strong> is the application’s decision that control of that key permits an action. A Bitcoin locking condition can grant that authority over an output. In Ethereum, a transaction signature identifies the sending account and other state rules determine what the account can do.</p>
+          <p>Encryption protects confidentiality. A signature is intended to be checked by anyone who has the right public inputs, and leaves those inputs readable. A signature should bind the message because otherwise Bob could copy Alice’s signature for “pay 1” onto “pay 10.” A <strong>forgery</strong> would be a valid signature for a new message under Alice’s key without obtaining authorization from the signer. An alternate representation of an existing signature raises a different question, explored in Chapter 19.</p>
+          <p class="callout"><strong>Analogy.</strong> Think of a publicly checkable seal made with a private stamp. A paper seal can be copied onto another sheet. A digital signature check depends on the contents of the sheet as well as the key.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why does Bob receive the public key?</li><li><b>Calculation.</b> If the covered amount changes from 1 to 10 and the digest changes, which verification input has changed?</li><li><b>Application.</b> What does a valid signature prove if Bob has no reliable record of who owns the key?</li></ol>
+            <details><summary>Hint</summary><p>Separate the key, the bytes, and the person.</p></details>
+            <details><summary>Answer</summary><p>Bob needs the public key to test the signature. A changed amount changes the message digest, even when the same signature bytes are presented. The check establishes validity under a supplied key. Identity and the authority the application grants that key come from other evidence.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="modular">
+          <h3><span class="chapter-number">02</span> Modular arithmetic from scratch</h3>
+          <p>To do exact algebra on a finite set, we need a rule for staying in that set when we add or multiply. A clock provides the analogy. Seven hours after 10 on a 12-hour clock gives 5. Counting around a whole extra turn changes the elapsed time by 12 while leaving the display unchanged.</p>
+          <p>For an integer <code>a</code> and a positive modulus <code>m</code>, <code>a mod m</code> is the unique remainder in <code>0…m−1</code> after removing whole multiples of <code>m</code>. Thus <code>23 mod 7 = 2</code> since 23 = 3 × 7 + 2, and <code>−2 mod 7 = 5</code> since −2 = −1 × 7 + 5. Some programming languages return a negative remainder for negative inputs. To get the representative used here, add the modulus to a negative remainder.</p>
+          <div class="lab">
+            <p class="lab-label">Modular clock</p>
+            <h4>Walk forward or backward</h4>
+            <div class="controls">
+              <label>Modulus m<select id="clock-mod"><option>7</option><option>11</option><option>17</option><option>19</option></select></label>
+              <label>Start<input id="clock-start" type="number" step="1" min="-999" max="999" value="5"></label>
+              <label>Move by<input id="clock-step" type="number" step="1" min="-999" max="999" value="-2"></label>
+            </div>
+            <output id="clock-result" class="result" aria-live="polite">5 + (−2) ≡ 3 (mod 7)</output>
+            <figure class="figure">
+              <canvas id="clock-plot" data-size="680 270" role="img" aria-label="Modular clock showing the starting and ending residues."></canvas>
+              <figcaption>The ring shows the representatives. A negative step moves counterclockwise.</figcaption>
+            </figure>
+          </div>
+          <div class="table-scroll">
+            <table><caption>Arithmetic with representatives</caption><thead><tr><th scope="col">Operation</th><th scope="col">Calculation</th><th scope="col">Reason</th></tr></thead><tbody>
+              <tr><td>Add</td><td>6 + 5 ≡ 4 (mod 7)</td><td>11 = 7 + 4.</td></tr>
+              <tr><td>Subtract</td><td>3 − 8 ≡ 6 (mod 11)</td><td>−5 + 11 = 6.</td></tr>
+              <tr><td>Multiply</td><td>9 × 5 ≡ 11 (mod 17)</td><td>45 − 2 × 17 = 11.</td></tr>
+              <tr><td>Exponentiate</td><td>5³ ≡ 6 (mod 7)</td><td>5² ≡ 4, then 4 × 5 ≡ 6.</td></tr>
+            </tbody></table>
+          </div>
+          <p>The sign <code>≡</code> means two integers have the same remainder. For example 23 ≡ 2 modulo 7 because their difference is 21. You can reduce an intermediate result because substituting <code>a + tm</code> for <code>a</code>, with integer <code>t</code>, adds only multiples of <code>m</code> to sums and products. The final remainder survives. That also explains why the exponentiation example can reduce after every multiplication of the base. The exponent itself counts repetitions and follows the period of the group in which the base lives.</p>
+          <h4>What division is trying to undo</h4>
+          <p>To divide by 3 modulo 7, find a residue whose product with 3 is 1. Try 1 through 6: the residues of the products are 3, 6, 2, 5, 1, 4. So <code>3⁻¹ = 5 mod 7</code>, where the superscript −1 means <em>multiplicative inverse</em>. To evaluate 2 divided by 3, multiply 2 by 5 and reduce to 3. Check it by multiplying 3 by 3, which gives 2 modulo 7. The result lives on the clock.</p>
+          <p>For larger inputs, use the extended Euclidean algorithm. To invert 7 modulo 17, divide <code>17 = 2·7 + 3</code> and <code>7 = 2·3 + 1</code>. Back-substitute <code>1 = 7 − 2·3 = 7 − 2(17 − 2·7) = 5·7 − 2·17</code>. The 17 term disappears modulo 17, leaving inverse 5. This works exactly when the greatest common divisor of the value and modulus is 1. Modulo 8, 2 times anything is even, so there is no inverse for 2. With a prime modulus, every nonzero residue is coprime to it and has an inverse. Zero has none.</p>
+          <p>A <strong>finite field</strong> is a finite set with well-behaved addition, subtraction, multiplication, and division by nonzero elements. For prime <code>p</code>, the residues <code>0…p−1</code> form the field <code>𝔽ₚ</code>. Our point coordinates use <code>𝔽₁₇</code>. Later, integers that count generator steps wrap at the separate modulus 19.</p>
+          <div class="callout"><strong>Why use modulo almost everywhere?</strong> With real or rational coordinates you can still define a group law, but you get a different group. Rationals can grow in bit length and floating-point approximations can lose exact equality. A prime field gives a finite coordinate space, bounded representations, and exact arithmetic with division where needed. A chosen generator gives another finite cycle for scalars. These facts make the construction implementable. Hardness comes from the discrete logarithm problem in a well-chosen large group. Our clock and our 19-point group are simple to search.</div>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> How can a negative number have a nonnegative representative?</li><li><b>Calculation.</b> Find 4⁻¹ modulo 11 and use it to divide 7 by 4.</li><li><b>Application.</b> Why would replacing 17 with 16 change the point arithmetic?</li></ol>
+            <details><summary>Hint</summary><p>Find a multiple of 4 that is one more than a multiple of 11.</p></details>
+            <details><summary>Answer</summary><p>Add whole cycles to reach the chosen interval. 4·3 = 12, so the inverse is 3 and 7·3 ≡ 10 modulo 11. Modulo 16, an even nonzero slope denominator can lack an inverse. The prime-field formulas assume division by every nonzero residue exists.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="ordinary-curves">
+          <h3><span class="chapter-number">03</span> Ordinary elliptic curves</h3>
+          <p>A curve is a set of solutions to an equation. For a short Weierstrass curve the equation is <code>y² = x³ + ax + b</code>. Here <code>x</code> and <code>y</code> are coordinates, and <code>a</code> and <code>b</code> are public constants that choose the shape. Over the reals this lesson uses <code>a = −1</code> and <code>b = 1</code> for simple intersections. The running finite-field curve will use <code>a = b = 2</code>. The coefficients are chosen so the cubic has no repeated root, which avoids singularities such as cusps or crossings.</p>
+          <p>At <code>x = 0</code> the real equation gives <code>y² = 1</code>, so both (0, 1) and (0, −1) belong to the curve. Squaring removes the sign, so reflecting any point <code>P = (x, y)</code> across the horizontal axis gives <code>−P = (x, −y)</code>. The minus sign here will mean the inverse for point addition.</p>
+          <figure class="figure">
+            <canvas id="real-plot" data-size="720 300" role="img" aria-label="Real curve y squared equals x cubed minus x plus 1, with reflected points at x equals zero."></canvas>
+            <figcaption>(0, 1) and (0, −1) lie on opposite branches of the real curve.</figcaption>
+          </figure>
+          <div class="compare">
+            <div><h4>Vector addition</h4><p>In the full plane, add coordinates. (−1, 1) plus (0, 1) gives (−1, 2). At x = −1 the cubic is 1, but y² at y = 2 is 4. The result has left the curve.</p></div>
+            <div><h4>Curve addition</h4><p>Stay in the set of solutions. On this curve, the group sum of the same inputs is (1, −1). A horizontal line and a reflection explain why.</p></div>
+          </div>
+          <p><strong>Analogy.</strong> A game can define a legal move that lands on another playable square. Adding coordinates is a move in the whole plane. The curve needs a move whose result is always another legal curve point.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why does reflection keep you on this curve?</li><li><b>Calculation.</b> Test (1, 1) and (1, 2).</li><li><b>Application.</b> What property would a coordinate-wise “sum” have to satisfy to be useful here?</li></ol>
+            <details><summary>Hint</summary><p>Evaluate the right-hand side before considering y.</p></details>
+            <details><summary>Answer</summary><p>The reflected y has the same square. At x = 1 the right side is 1, so (1, 1) works and (1, 2) fails. The operation must be closed: every permitted pair of inputs must produce a permitted result.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="point-law">
+          <h3><span class="chapter-number">04</span> Why draw a line and reflect?</h3>
+          <p>We want a reversible, closed way to combine points so that expressions such as “add this point seven times” have a consistent meaning. A smooth cubic supplies a natural starting observation: once a nonvertical line passes through two known points, substituting the line into the cubic leaves a third root. The group law grew out of studying intersections and rational solutions on cubics. When the curve coefficients and first two points are rational, the third root is rational too, since the sum of the three roots is already determined by the line. The construction works algebraically in the prime field we will use. <a href="https://crypto.stanford.edu/pbc/notes/elliptic/group.html">Stanford notes on the chord-and-tangent law</a>.</p>
+          <p>On our real curve, the chord through (−1, 1) and (0, 1) is <code>y = 1</code>. Substitution gives <code>x³ − x = x(x−1)(x+1) = 0</code>, so the third intersection is (1, 1). Reflect it to get (1, −1). Clicking through the construction exposes the roles of the line, third root, and reflection.</p>
+          <div class="lab">
+            <p class="lab-label">Geometric construction</p>
+            <h4>Chord and tangent</h4>
+            <div class="controls">
+              <label>Operation<select id="geometry-kind"><option value="chord">Add two points</option><option value="tangent">Double one point</option><option value="vertical">Add inverses</option></select></label>
+              <label>Construction step<select id="geometry-step"><option value="1">1. Inputs and line</option><option value="2">2. Third intersection</option><option value="3" selected>3. Reflect to get the sum</option></select></label>
+            </div>
+            <output id="geometry-result" class="result" aria-live="polite">The chord hits (1, 1). Its reflection is the sum (1, −1).</output>
+            <figure class="figure">
+              <canvas id="geometry-plot" data-size="720 310" role="img" aria-label="Chord-and-tangent construction over the real numbers."></canvas>
+              <figcaption>The gold line determines the third intersection. The cyan point marks the reflected result.</figcaption>
+            </figure>
+          </div>
+          <h4>Why reflection and infinity belong together</h4>
+          <p>Include <code>𝒪</code>, the point at infinity, as the neutral element. In the projective completion of this Weierstrass curve every vertical line meets the curve at the same point at infinity as well as its finite intersections. Give the three intersections of a line the relation <code>P₁ + P₂ + T = 𝒪</code>, where <code>P₁</code> and <code>P₂</code> are the inputs and <code>T</code> is the third intersection. On a vertical line the finite pair is <code>P</code> and its reflection <code>−P</code>. So <code>P + (−P) = 𝒪</code>, and <code>P + 𝒪 = P</code> follows from taking the third intersection on the vertical line through <code>P</code> and <code>𝒪</code> and reflecting it back. Consequently the chord sum is <code>−T</code>. Using the third point directly would return <code>−P</code> when combining <code>P</code> with <code>𝒪</code>, spoiling the identity.</p>
+          <p><strong>Analogy.</strong> Along a level road, a move east and the same move west cancel. Here the vertical line identifies the pair of points that cancel. The identity is a point in the completed mathematical curve, with no finite (x, y) coordinates.</p>
+          <h4>Derive the coordinate formulas</h4>
+          <ol>
+            <li>Let the public geometric inputs be <code>P₁ = (x₁,y₁) = (−1,1)</code> and <code>P₂ = (x₂,y₂) = (0,1)</code>. For unequal X coordinates, slope is rise over run. Thus <code>λ = (y₂ − y₁)/(x₂ − x₁) = 0/1 = 0</code>. Write the line <code>y = λx + c</code> using intercept <code>c = y₁ − λx₁ = 1</code>.</li>
+            <li>At an intersection both equations hold. Substitute <code>(λx + c)² = x³ + ax + b</code>, expand and move terms to get <code>x³ − λ²x² + (a − 2λc)x + (b − c²) = 0</code>. For the chord, a = −1 and b = 1, giving <code>x³ − x = 0</code>.</li>
+            <li>The roots are the X coordinates <code>x₁, x₂, x₃</code>. Expanding <code>(x−x₁)(x−x₂)(x−x₃)</code> shows that its x² coefficient is <code>−(x₁ + x₂ + x₃)</code>. Match coefficients to get <code>x₁ + x₂ + x₃ = λ²</code>, then <code>x₃ = λ² − x₁ − x₂ = 0 − (−1) − 0 = 1</code>.</li>
+            <li>The line has height <code>y₁ + λ(x₃ − x₁)</code> at the third root. Negate this height to reflect it. The sum’s Y coordinate is <code>y₃ = λ(x₁ − x₃) − y₁ = 0 − 1 = −1</code>. Reflection leaves <code>x₃</code> unchanged. These real examples use ordinary division and no modulus.</li>
+          </ol>
+          <h4>Why doubling uses a tangent</h4>
+          <p>A chord through a point and itself leaves rise and run both zero. As the second point approaches the first on a smooth branch the chord approaches the tangent. Algebraically the tangent meets the curve twice at the same input, so the input X appears twice among the cubic roots. Differentiate <code>y² = x³ + ax + b</code> with respect to x to get <code>2y·dy/dx = 3x² + a</code>. At the input the tangent slope is <code>λ = (3x₁² + a)/(2y₁)</code>. For (0, 1) it is −1/2, then <code>x₃ = (−1/2)² − 0 − 0 = 1/4</code> and <code>y₃ = (−1/2)(0 − 1/4) − 1 = −7/8</code>. If <code>y₁ = 0</code> the point is its own inverse and the tangent is vertical, so doubling gives <code>𝒪</code>.</p>
+          <h4>Why call it a group law?</h4>
+          <p><strong>Closure</strong> comes from the remaining root and reflection, with vertical cases covered by <code>𝒪</code>. <strong>Commutativity</strong> follows because switching inputs leaves their line or tangent unchanged. <strong>Identity</strong> and <strong>inverses</strong> follow from vertical lines. <strong>Associativity</strong> is the deeper property: combining three points gives the same result under either parenthesization. The drawing alone does not prove it.</p>
+          <details><summary>Why associativity has a structural proof</summary><p>A standard proof represents a point P by the class of the formal difference [P] − [𝒪]. In this construction, sums of zeros minus poles of rational functions count as zero. The ratio of a line through P₁, P₂, T to the line at infinity gives the relation [P₁] + [P₂] + [T] − 3[𝒪] = 0 in those classes, with intersections counted with multiplicity. A vertical line gives the inverse relation. The theorem that each degree-zero class has a unique point representative transfers the associative addition of classes to the points. This is the same line-and-reflection rule viewed through an operation whose associativity is already known. <a href="https://math.berkeley.edu/~ltomczak/notes/Lent2023/EC_Notes.pdf">Elliptic Curves lecture notes, group law and divisor-class proof</a>.</p></details>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why reflect the third point?</li><li><b>Calculation.</b> Double (1, 1) on the real curve.</li><li><b>Application.</b> Why does commutativity alone fail to justify grouping seven additions into blocks?</li></ol>
+            <details><summary>Hint</summary><p>For doubling, use a = −1 and compare the X result to the starting X.</p></details>
+            <details><summary>Answer</summary><p>Reflection takes the inverse of the third point so that the three collinear points sum to the identity. For (1, 1), λ = (3−1)/2 = 1, x₃ = 1−2 = −1 and y₃ = 1·(1+1)−1 = 1. Commutativity changes operand order. Associativity licenses changing how they are grouped.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="finite-curves">
+          <h3><span class="chapter-number">05</span> From a smooth curve to a finite field</h3>
+          <p>Use the same algebra over the public field <code>𝔽₁₇</code>. With <code>a = b = 2</code>, the relation <code>y² ≡ x³ + 2x + 2 (mod p)</code> and <code>p = 17</code> defines the running curve. Enumerate the possible X and Y residues from 0 to 16. (5, 1) passes because the left side is 1 and the right side is 137 ≡ 1. (5, 2) fails since 4 and 1 are distinct residues.</p>
+          <div class="chart-pair">
+            <figure class="figure"><canvas id="same-real-plot" data-size="540 320" role="img" aria-label="Smooth real-number solutions to y squared equals x cubed plus 2x plus 2."></canvas><figcaption>The equation over the reals makes a smooth locus.</figcaption></figure>
+            <figure class="figure"><canvas id="finite-plot" data-size="540 320" role="img" aria-label="The 18 affine solutions modulo 17 separated on a grid."></canvas><figcaption>Modulo 17, only the plotted residue pairs pass. 𝒪 has no grid location.</figcaption></figure>
+          </div>
+          <p>Reducing after multiplication changes which pairs solve the equation. Connecting the dots on the finite grid with ordinary line segments has no algebraic meaning. The chord and tangent construction survives because the line equation, polynomial expansion, and coefficient matching only require field operations. The finite formulas use a multiplicative inverse in place of a real fraction.</p>
+          <p>Point negation keeps x and replaces y with <code>−y mod p</code>. For G = (5, 1), −G = (5, 16). The Y coordinates 1 and 16 add to 17, which is zero in this field. A vertical pair sums to <code>𝒪</code>. For ordinary distinct points use the chord rule. For two copies use the tangent rule unless the point equals its inverse. If an input is <code>𝒪</code> return the other input.</p>
+          <div class="calc"><strong>Double G = (5, 1).</strong> The tangent numerator <code>3·5² + 2 = 77</code> comes from the cubic. The denominator <code>2·1 = 2</code> comes from y². Since <code>2·9 = 18 ≡ 1</code> modulo 17, the slope is <code>λ = 77·9 ≡ 13</code>. Then <code>x₃ = 13² − 5 − 5 = 159 ≡ 6</code> and <code>y₃ = 13(5 − 6) − 1 = −14 ≡ 3</code>. The sum is (6, 3).</div>
+          <div class="calc"><strong>Add G to 2G = (6, 3).</strong> The chord rises 2 residues over a run of 1, whose inverse is 1. Thus <code>λ = (3−1)·1 = 2</code>, <code>x₃ = 2²−5−6 = −7 ≡ 10</code>, and <code>y₃ = 2(5−10)−1 = −11 ≡ 6</code>. The sum is (10, 6). Try substituting it into the original equation.</div>
+          <div class="lab" id="addition-lab">
+            <p class="lab-label">Experiment A</p>
+            <h4>Point addition</h4>
+            <p>Select two points. Try two copies, two points with the same X, and the identity.</p>
+            <div class="controls"><label>First point P₁<select id="add-first"><option value="1">G (5, 1)</option></select></label><label>Second point P₂<select id="add-second"><option value="2">2G (6, 3)</option></select></label></div>
+            <output id="add-result" class="result" aria-live="polite">G + 2G = (10, 6)</output>
+            <figure class="figure"><canvas id="add-plot" data-size="650 310" role="img" aria-label="Two selected finite-field input points and their sum."></canvas><figcaption>Violet and gold mark the two inputs. Cyan marks the sum. Coincident points are drawn as concentric rings.</figcaption></figure>
+          </div>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why does the finite grid have gaps?</li><li><b>Calculation.</b> Compute (6, 3) + (6, 14) and check (10, 6) on the curve.</li><li><b>Application.</b> Which branch should code check before inverting a chord denominator?</li></ol>
+            <details><summary>Hint</summary><p>Reduce the sum of the first pair’s Y coordinates and compare both sides of the curve equation for the second point.</p></details>
+            <details><summary>Answer</summary><p>Residue pairs are plotted only if they solve the congruence. 3 + 14 ≡ 0, so the first sum is 𝒪. At (10, 6), 36 ≡ 2 and 1022 ≡ 2. Same-X inverse pairs have a vertical line and must be handled before attempting division by zero.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="generators">
+          <h3><span class="chapter-number">06</span> Groups, generators, and scalar multiplication</h3>
+          <p>A group is a set with an operation you can repeat, undo, and regroup. A <strong>generator</strong> <code>G</code> is a designated starting point for a cycle. From <code>𝒪</code>, add <code>G</code> repeatedly. The notation <code>7G</code> means taking seven generator steps. It uses the point law seven times starting at the identity. On our curve <code>G = (5,1)</code> and <code>7G = (0,6)</code>. Multiplying coordinates would give (35, 7), or (1, 7) after coordinate reduction. At x = 1 the cubic is 5 while 7² ≡ 15, so it does not even land on the curve.</p>
+          <p>Addition by G is reversible by subtracting G. In a finite set the sequence must repeat. If two steps i and j reach the same point, subtract i steps and get back to the starting point after j − i steps. The <strong>order</strong> <code>n</code> is the smallest positive step count that returns to <code>𝒪</code>. These reachable points form a <strong>cyclic subgroup</strong>: sums and inverses stay in that cycle even if the full curve has other points. Our generator has order 19 and reaches every point on the curve.</p>
+          <div class="compare">
+            <div><h4>Coordinates wrap at p = 17</h4><p>Point formulas do field arithmetic. For example, the X coordinate 159 of 2G reduces to 6. The next point operation expects coordinates in 0–16.</p></div>
+            <div><h4>Generator counts wrap at n = 19</h4><p>Scalars count steps. For example, 26G = (19 + 7)G = 7G. The point is reached after a whole circuit plus seven steps.</p></div>
+          </div>
+          <p><strong>Analogy.</strong> A board game can have both coordinates on its board and a path through the board. The position of a square uses the coordinate rules. The number of moves until you revisit it uses the length of the path.</p>
+          <div class="compare">
+            <div><h4>Traditional Diffie–Hellman</h4><p>In a multiplicative group, public base <code>g</code> is combined with itself by multiplication. With sample prime 7 and g = 3, Alice’s secret exponent 2 gives 3² ≡ 2, and Bob’s secret exponent 3 gives 3³ ≡ 6. Alice computes 6² ≡ 1 and Bob computes 2³ ≡ 1. Both got 3⁶ mod 7. This tiny example deliberately wraps to the identity. Real parameters use a suitable large subgroup.</p></div>
+            <div><h4>Elliptic-curve Diffie–Hellman</h4><p>In the additive curve group, Alice’s secret 2 produces 2G and Bob’s 3 produces 3G. Alice computes 2(3G) and Bob computes 3(2G). Both get 6G = (16, 13). ECDH uses this shared point to derive keys. ECDSA uses the same kind of scalar multiplication for signatures.</p></div>
+          </div>
+          <p>Both <code>gᵃ mod p</code> and <code>aG</code> mean iterating the group operation <code>a</code> times, where <code>a</code> in this comparison is a scalar, unrelated to the curve coefficient. Reversing either map to find the step count is a discrete logarithm problem in its respective group. For prime-field Diffie–Hellman the exponent period is the order of <code>g</code>, while each residue multiplication uses that example’s field modulus.</p>
+          <p><strong>Double-and-add</strong> exploits the binary representation. To compute 7G, read 7 as <code>4 + 2 + 1</code>. Double G to get 2G and double 2G to get 4G, then add the three terms. For 6G use 4G + 2G and skip G. A scalar with 256 bits needs a number of group operations proportional to the bit length, even though taking that many single steps is infeasible. Real secret-scalar implementations also address side channels and may use specialized algorithms, precomputation, and projective coordinates.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> What ensures the cycle returns to 𝒪 before repeating anywhere else?</li><li><b>Calculation.</b> Write 13G using powers of two. Reduce 51G.</li><li><b>Application.</b> Where would you use modulo 17 when computing 13G, and where could you use modulo 19?</li></ol>
+            <details><summary>Hint</summary><p>13 = 8 + 4 + 1 and 51 = 2·19 + 13.</p></details>
+            <details><summary>Answer</summary><p>Translation by G is invertible. A repeated point implies the difference in steps brings 𝒪 back to itself. Use 8G + 4G + G, also the value of 51G. Reduce slope and coordinates modulo 17. Reduce the generator step count modulo 19.</p></details>
+          </details>
+        </section>
+      </section>
+
+      <section class="part" id="toy-curve" aria-labelledby="toy-title">
+        <p class="part-number">Part II</p>
+        <h2 id="toy-title">One curve you can count</h2>
+        <p class="part-lead">Build a complete lookup table. It will let you check every point that appears in the rest of the tutorial.</p>
+
+        <section class="chapter" id="running-example">
+          <h3><span class="chapter-number">07</span> The 19-point curve</h3>
+          <p>Our public parameters are <code>p = 17</code>, <code>a = b = 2</code>, <code>G = (5,1)</code>, and generator order <code>n = 19</code>. For every X from 0 to 16, compute <code>x³ + 2x + 2 mod 17</code>. Try each Y from 0 to 16 and keep the matches. There are nine usable X residues, each with two Y values. For example, at x = 0 the target is 2 and 6² = 36 ≡ 2, so 6 and 17 − 6 = 11 both work. The 18 finite points below and <code>𝒪</code> are the whole group.</p>
+          <figure class="figure">
+            <canvas id="cycle-plot" data-size="720 300" role="img" aria-label="Cycle of 19 generator steps starting and ending at the identity."></canvas>
+            <figcaption>Each step in the ring adds G. Nearby positions in this sequence can have very different X and Y coordinates on the grid.</figcaption>
+          </figure>
+          <div class="table-scroll">
+            <table class="compact"><caption>Every multiple of G, in step order. Together the finite entries list every valid affine point.</caption>
+              <thead><tr><th scope="col">Multiple</th><th scope="col">Point</th><th scope="col">Multiple</th><th scope="col">Point</th></tr></thead>
+              <tbody>
+                <tr><td>0G</td><td>𝒪</td><td>10G</td><td>(7, 11)</td></tr>
+                <tr><td>1G</td><td>(5, 1)</td><td>11G</td><td>(13, 10)</td></tr>
+                <tr><td>2G</td><td>(6, 3)</td><td>12G</td><td>(0, 11)</td></tr>
+                <tr><td>3G</td><td>(10, 6)</td><td>13G</td><td>(16, 4)</td></tr>
+                <tr><td>4G</td><td>(3, 1)</td><td>14G</td><td>(9, 1)</td></tr>
+                <tr><td>5G</td><td>(9, 16)</td><td>15G</td><td>(3, 16)</td></tr>
+                <tr><td>6G</td><td>(16, 13)</td><td>16G</td><td>(10, 11)</td></tr>
+                <tr><td>7G</td><td>(0, 6)</td><td>17G</td><td>(6, 14)</td></tr>
+                <tr><td>8G</td><td>(13, 7)</td><td>18G</td><td>(5, 16)</td></tr>
+                <tr><td>9G</td><td>(7, 6)</td><td>19G</td><td>𝒪</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Doubling 2G = (6, 3) gives <code>λ = (3·6²+2)·6⁻¹</code>. The inverse of 6 modulo 17 is 3, so 110·3 ≡ 7. Then x = 7² − 6 − 6 ≡ 3 and y = 7(6 − 3) − 3 ≡ 1. Therefore <code>4G = (3, 1)</code>. At the end, 18G = (5, 16) is −G. Adding G gives the identity, and none of steps 1 through 18 gives it. This exhibits the order 19.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> How many points on the curve lack affine coordinates?</li><li><b>Calculation.</b> Read −8G from the table. Compute 29G.</li><li><b>Application.</b> How could you independently check that the table lists every valid point?</li></ol>
+            <details><summary>Hint</summary><p>Use the generator’s period to rewrite a negative or overly large step count.</p></details>
+            <details><summary>Answer</summary><p>Only 𝒪 lacks affine coordinates. −8G = 11G = (13, 10), the reflection of (13, 7), and 29G = 10G = (7, 11). Enumerate all 17² possible pairs and compare the passing pairs to the table.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="keys">
+          <h3><span class="chapter-number">08</span> From a secret number to a public point</h3>
+          <p>We want a secret the signer can use in algebra and a public value linked to it through a hard-to-reverse operation. Choose a secret integer <code>d</code> in <code>1…n−1</code>. Each representative selects a different non-identity point from the generator cycle. A zero or whole-cycle secret would produce <code>𝒪</code>. Publish <code>Q = dG</code>. The integer <code>d = 7</code> in this tutorial is visible for teaching. In practice the key generator samples from the allowed domain using a cryptographic random source. <code>Q = (0,6)</code> is a pair of field coordinates in this example.</p>
+          <div class="table-scroll">
+            <table><caption>Repeated addition from 𝒪 to 7G. The slope, inverse, and resulting coordinates use modulo 17.</caption>
+              <thead><tr><th scope="col">Step</th><th scope="col">Add to the previous value</th><th scope="col">Slope calculation</th><th scope="col">Point</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">1</th><td>𝒪 + G</td><td>Identity</td><td>(5, 1)</td></tr>
+                <tr><th scope="row">2</th><td>G + G</td><td>77·9 ≡ 13</td><td>(6, 3)</td></tr>
+                <tr><th scope="row">3</th><td>2G + G</td><td>(−2)·16 ≡ 2</td><td>(10, 6)</td></tr>
+                <tr><th scope="row">4</th><td>3G + G</td><td>(−5)·10 ≡ 1</td><td>(3, 1)</td></tr>
+                <tr><th scope="row">5</th><td>4G + G</td><td>0·9 ≡ 0</td><td>(9, 16)</td></tr>
+                <tr><th scope="row">6</th><td>5G + G</td><td>(−15)·4 ≡ 8</td><td>(16, 13)</td></tr>
+                <tr><th scope="row">7</th><td>6G + G</td><td>(−12)·3 ≡ 15</td><td>(0, 6)</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>For the shorter route, double G to 2G and double 2G to 4G as above. Add 4G = (3, 1) and 2G = (6, 3). Run is 3, its inverse is 6, and slope is 2·6 = 12. X becomes <code>12² − 3 − 6 ≡ 16</code> and Y becomes <code>12(3−16)−1 ≡ 13</code>. Add G to (16, 13): run −11 ≡ 6 has inverse 3, slope −12·3 ≡ 15, X is 225 − 16 − 5 ≡ 0, and Y is 15(16−0)−13 ≡ 6. That gives the same Q in four point operations.</p>
+          <div class="lab" id="key-lab">
+            <p class="lab-label">Experiment B · Shared inputs</p>
+            <h4>Generate a public key</h4>
+            <p>Change the toy private key here or in the signing lab. Both controls edit the same value.</p>
+            <div class="controls"><label>Private scalar d<input id="key-d" type="number" min="1" max="18" step="1" value="7"></label></div>
+            <output id="key-result" class="result" aria-live="polite">7G = (0, 6)</output>
+            <figure class="figure"><canvas id="key-plot" data-size="650 310" role="img" aria-label="Generator G and public point Q on the finite-field grid."></canvas><figcaption>Violet marks G. Cyan moves with your public key.</figcaption></figure>
+          </div>
+          <p>Given G and Q, finding d is the <strong>elliptic-curve discrete logarithm problem</strong>. You can find the answer in the table on this page. On secp256k1, the order is near 2²⁵⁶. Generic classical attacks such as Pollard’s rho take on the order of the square root of the group order in group operations. Repeated doubling computes the forward map quickly because the signer knows the bits of d. Q does not visibly encode those bits, even though d is uniquely determined within the allowed interval.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why is a private key a scalar and a public key a point?</li><li><b>Calculation.</b> Find the private scalar for the toy public point (13, 10).</li><li><b>Application.</b> Why does faster double-and-add fail to solve the inverse problem by itself?</li></ol>
+            <details><summary>Hint</summary><p>Use the table for the tiny problem. Consider which input double-and-add expects.</p></details>
+            <details><summary>Answer</summary><p>The scalar counts the steps and the point is the result. (13, 10) appears at 11G, so d = 11 here. Double-and-add evaluates the forward map by using the known bits of d. Given only Q, those bits are exactly what you would need to discover.</p></details>
+          </details>
+        </section>
+
+        <aside class="challenge"><h4>Cumulative challenge</h4><p>Starting at G, compute 2G, 4G, and (19 − 4)G. Say where the modulus changes.</p><details><summary>Hint</summary><p>The inverse of 4G lies on the same vertical coordinate line.</p></details><details><summary>Solution</summary><p>Two tangent calculations give (6, 3) then (3, 1) using modulo 17. The step count 19 − 4 ≡ −4 modulo 19, so the result is the negation of 4G. Reflect its Y coordinate modulo 17 to obtain (3, 16).</p></details></aside>
+      </section>
+
+      <section class="part" id="signing" aria-labelledby="signing-title">
+        <p class="part-number">Part III</p>
+        <h2 id="signing-title">Build a signature</h2>
+        <p class="part-lead">Connect a message digest and a secret key to a temporary point, then turn that relationship into two public numbers.</p>
+
+        <section class="chapter" id="digest">
+          <h3><span class="chapter-number">09</span> From message to digest</h3>
+          <p>Alice’s intent might be “pay Bob one coin.” The protocol turns structured data into a canonical list of bytes, or <strong>serialization</strong>, and defines which fields a given signature covers. This matters because a change from a recipient to a different recipient can be one small byte edit. A human-readable label alone leaves ambiguity about what the signer committed to.</p>
+          <ol class="flow" aria-label="From intent to the ECDSA scalar">
+            <li><strong>Intent</strong><span>“Pay Bob one coin.”</span></li>
+            <li><strong>Signing preimage</strong><span>The exact serialized bytes covered by the application rules.</span></li>
+            <li><strong>Hash output</strong><span>A fixed-length digest of those bytes under the chosen hash function.</span></li>
+            <li><strong>Integer z</strong><span>Interpret the designated leftmost digest bits as an unsigned big-endian integer.</span></li>
+          </ol>
+          <p>A cryptographic hash maps variable-length input to fixed-length output and is designed to make finding collisions or a matching replacement message hard. An ECDSA implementation converts the digest to an integer <code>z</code>. If the digest is longer than the bit length of <code>n</code>, use its leftmost <code>bitlength(n)</code> bits. A shorter digest is interpreted as-is. Subsequent signature arithmetic treats z modulo n. Truncating bits and reducing modulo n are different operations. For example with n = 19, retain five bits. A fictional input bit string <code>01000111</code> gives <code>01000</code>, or 8. Reducing the entire byte 71 modulo 19 would give 14. <a href="https://www.secg.org/sec1-v2.pdf">SEC 1, ECDSA generation and verification</a>.</p>
+          <p>Throughout this guide <code>z = 8</code> is chosen for hand calculation. The fictional message has no computed hash here. With secp256k1 and a 256-bit digest, all 256 bits are interpreted. The application and its signing library must agree on whether the input is a precomputed hash or bytes the library will hash. Hashing an already prepared digest again changes what is signed.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> What connects a signature to a transaction field?</li><li><b>Calculation.</b> On the toy curve, derive z from the fictional bits 11110101 and then find its scalar residue.</li><li><b>Application.</b> What goes wrong when one side signs a digest and the other side verifies a digest of that digest?</li></ol>
+            <details><summary>Hint</summary><p>Truncate left to right before applying the scalar modulus.</p></details>
+            <details><summary>Answer</summary><p>The field must affect the signing preimage. The retained bits 11110 give z = 30, whose scalar residue is 11. The two sides will generally use different z values and fail to verify. The signing API must agree with the application’s prehash contract.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="nonce">
+          <h3><span class="chapter-number">10</span> A temporary secret for each signature</h3>
+          <p>The signer needs a temporary point that the verifier can reconstruct indirectly. Its step count must remain secret, or the relationship linking the digest and key becomes a solvable equation in the long-term secret. This temporary scalar is the signing <strong>nonce</strong> <code>k</code>, chosen in <code>1…n−1</code>. A temporary point <code>R = kG</code> is computed with exactly the same point law used for Q.</p>
+          <div class="compare">
+            <div><h4>Long-term key</h4><p><span class="tag secret">Secret</span> <code>d = 7</code> is the signing key.<br><span class="tag">Public</span> <code>Q = dG = (0, 6)</code> identifies the verification key.</p></div>
+            <div><h4>Per-signature pair</h4><p><span class="tag secret">Secret</span> <code>k = 4</code> selects the temporary point.<br><span class="tag">Derived</span> <code>R = kG = (3, 1)</code> contributes its X coordinate. The point can be reconstructed by a verifier with the public key.</p></div>
+          </div>
+          <p>To compute 4G, double twice: (5, 1) becomes (6, 3), then (3, 1). A random signer needs an unbiased cryptographic source for k. A deterministic signer derives k from the secret key and signing input using a construction such as RFC 6979. Signing the same digest under the same key and deterministic procedure can repeat a signature. Using a constant nonce with different digests gives multiple equations with the same secrets and can reveal the key. Keep k out of logs, traces, and error reports.</p>
+          <p><strong>Analogy.</strong> Think of a temporary secret used to blind one calculation. The public signature can carry a trace of the corresponding point, while the secret step count is still needed to undo the blinding algebraically. Chapter 22 shows exactly what breaks when the same count blinds two different calculations.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Which value is intended to be kept for future signatures, d or k?</li><li><b>Calculation.</b> Find R for k = 15 and compare its X with R for k = 4.</li><li><b>Application.</b> Is a transaction’s public account nonce an acceptable source of secret k?</li></ol>
+            <details><summary>Hint</summary><p>15 ≡ −4 (mod 19).</p></details>
+            <details><summary>Answer</summary><p>Keep d. The temporary point is 15G = (3, 16), so the X values coincide. An Ethereum account nonce is a publicly checkable transaction counter. A publicly known ECDSA nonce lets someone solve for d.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="signature">
+          <h3><span class="chapter-number">11</span> Deriving the two signature components</h3>
+          <p>Imagine designing the check first. Given G and Q, a verifier can compute <code>zG + rQ</code>. The term <code>zG</code> makes the check depend on the message. The term <code>rQ</code> makes it depend on the public key and a number <code>r</code> the signer commits to from the temporary point. ECDSA ties them together by requiring this sum to be a known multiple <code>s</code> of some temporary point <code>R</code>. The verifier can undo the multiplication by s and check whether the resulting X coordinate is consistent with r.</p>
+          <ol class="flow" aria-label="Signature inputs and their dependencies">
+            <li><strong>k and G produce R</strong><span>4G reaches (3, 1).</span></li>
+            <li><strong>R.x produces r</strong><span>Reduce coordinate 3 modulo 19.</span></li>
+            <li><strong>z, r, and d form a sum</strong><span>8 + 3·7 gives 29.</span></li>
+            <li><strong>k⁻¹ scales the sum</strong><span>5·29 mod 19 gives s = 12.</span></li>
+          </ol>
+          <p>To see why the formula follows, start with that desired point equation <code>sR = zG + rQ</code>. Substitute <code>R = kG</code> and <code>Q = dG</code>. Repeated point addition gives <code>s(kG) = (sk)G</code>, and <code>r(dG) = (rd)G</code>. Distributivity over generator counts gives <code>zG + (rd)G = (z + rd)G</code>. So we need <code>(sk)G = (z + rd)G</code>. Two scalar multiples of G give the same point exactly when their step counts differ by a multiple of its order n. That converts point equality to <code>sk ≡ z + rd (mod n)</code>. Since k is nonzero modulo prime n, multiply both sides by its inverse to isolate <code>s ≡ k⁻¹(z + rd) (mod n)</code>.</p>
+          <div class="calc"><strong>Calculate r.</strong> <code>R.x = 3</code> is an X coordinate computed in the field. Turn it into a scalar <code>r = 3 mod 19 = 3</code> for the multiplication of Q. This commits to an X residue by a test the verifier can repeat. The equation uses the nonce point, while the public key’s X is 0.</div>
+          <div class="calc"><strong>Calculate s.</strong> Since <code>4·5 = 20 = 19 + 1</code>, <code>k⁻¹ = 5</code> modulo 19. Compute <code>rd = 3·7 = 21</code>, <code>z + rd = 8 + 21 = 29</code>, and <code>5·29 = 145 = 7·19 + 12</code>. Thus <code>s = 12</code>. The transmitted pair is <code>(r,s) = (3,12)</code>. The scalar s is the factor that makes the nonce point land exactly on the public linear combination.</div>
+          <p>If <code>r = 0</code>, the term rQ disappears and r has no inverse for recovery. If <code>s = 0</code>, the verifier cannot undo the multiplication by s. Both are invalid. Pick a new valid nonce according to the signer’s generation rules or report signing failure where required by the applicable standard. Try k = 7 for r = 0. With d = 7 and k = 4, try z = 17 for s = 0.</p>
+          <div class="lab" id="signing-lab">
+            <p class="lab-label">Experiment C · Shared inputs</p>
+            <h4>Produce a toy signature</h4>
+            <p>The verifier, recovery lab, normalization, and nonce experiment follow these values. The fixed worked examples keep their original numbers.</p>
+            <div class="controls">
+              <label>Private scalar d<input id="sign-d" type="number" min="1" max="18" step="1" value="7"></label>
+              <label>Digest integer z<input id="sign-z" type="number" min="0" max="31" step="1" value="8"></label>
+              <label>Nonce k<input id="sign-k" type="number" min="1" max="18" step="1" value="4"></label>
+              <button type="button" id="reset-sign">Reset example</button>
+            </div>
+            <output class="result" id="sign-result" aria-live="polite">R = 4G = (3, 1). Signature (3, 12).</output>
+            <figure class="figure"><canvas id="sign-plot" data-size="650 310" role="img" aria-label="Temporary point R and the equality sR equals zG plus rQ."></canvas><figcaption>Gold marks R. Cyan marks where the scalar multiplication sR and public sum zG + rQ meet.</figcaption></figure>
+          </div>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why does the verifier need r and s?</li><li><b>Calculation.</b> Keep d = 7 and k = 4 but sign z = 9.</li><li><b>Application.</b> How would you diagnose a nonzero r but a zero s in this lab?</li></ol>
+            <details><summary>Hint</summary><p>r depends on k. Recompute only the digest-dependent term and its scaling first.</p></details>
+            <details><summary>Answer</summary><p>r supplies the key coefficient and the X check. s lets the verifier undo the scalar multiplication of R. The next signature is (3, 17) since 5(9 + 21) = 150 ≡ 17. An invertible nonce cannot turn a nonzero residue into zero. Check whether z + rd is zero modulo n, then follow the signer’s retry rules.</p></details>
+          </details>
+        </section>
+      </section>
+
+      <section class="part" id="verification" aria-labelledby="verification-title">
+        <p class="part-number">Part IV</p>
+        <h2 id="verification-title">Verify with public data</h2>
+        <p class="part-lead">Test the signature by constructing two public point multiples and checking their sum.</p>
+
+        <section class="chapter" id="check-signature">
+          <h3><span class="chapter-number">12</span> Verification from start to finish</h3>
+          <p>The verifier receives the public key <code>Q = (0, 6)</code>, derives <code>z = 8</code> using the same message rules, and decodes the signature <code>(r,s) = (3,12)</code>. The secret inputs d and k never enter the calculation. Validate the curve parameters and the encoding. Q must be a finite curve point with coordinates in range and belong to the correct subgroup. Here Q lies on the curve because 6² ≡ 2 and the cubic at x = 0 is 2. Its order divides 19, which the table also shows since 19·7G = 7·19G = 𝒪. Check both signature scalars are in 1…18 before taking inverses. Real applications also enforce their encoding and protocol-specific restrictions.</p>
+          <ol>
+            <li><strong>Undo s.</strong> <code>w = s⁻¹ mod n = 8</code> because <code>12·8 = 96 = 5·19 + 1</code>. All three scalars w, u₁ and u₂ below are public intermediates.</li>
+            <li><strong>Scale the digest.</strong> <code>u₁ = zw mod n = 8·8 mod 19 = 7</code> since 64 = 3·19 + 7.</li>
+            <li><strong>Scale the key coefficient.</strong> <code>u₂ = rw mod n = 3·8 mod 19 = 5</code> since 24 = 19 + 5.</li>
+            <li><strong>Multiply and add points.</strong> <code>R′ = u₁G + u₂Q</code> is the verifier’s reconstructed point. <code>7G = (0,6)</code> and <code>5Q = 5(7G) = 35G = 16G = (10,11)</code>. Their field chord rises 5 over a run of 10, whose inverse is 12 (120 ≡ 1 modulo 17). Thus <code>λ ≡ 5·12 ≡ 9</code>. Then x ≡ 81−0−10 ≡ 3 and y ≡ 9(0−3)−6 ≡ 1, so <code>R′ = (3,1)</code>. As a cross-check, the total step count is 7 + 35 = 42 ≡ 4 modulo 19.</li>
+            <li><strong>Test the commitment.</strong> Reject <code>R′ = 𝒪</code>, which has no X coordinate. Otherwise convert <code>R′.x</code> to a scalar using modulo n. Here <code>3 mod 19 = r</code>, so the signature is valid.</li>
+          </ol>
+          <ol class="flow" aria-label="Verification computation">
+            <li><strong>Digest multiple</strong><span>u₁ = 7. Multiply the public generator to get (0, 6).</span></li>
+            <li><strong>Public-key multiple</strong><span>u₂ = 5. Multiply Q to get (10, 11).</span></li>
+            <li><strong>Point sum</strong><span>Add the results with the curve law to get (3, 1).</span></li>
+            <li><strong>Scalar comparison</strong><span>3 mod 19 matches the transmitted r = 3.</span></li>
+          </ol>
+          <div class="lab" id="verification-lab">
+            <p class="lab-label">Experiment D</p>
+            <h4>Verify and tamper</h4>
+            <p>Start with the signing lab’s values. Turn off the link to edit individual inputs. The point list labels keys by their toy generator step for manual checking.</p>
+            <div class="controls">
+              <label class="check"><input id="verify-follow" type="checkbox" checked> Use signing lab values</label>
+              <label>Public point Q<select id="verify-q" disabled><option value="7">(0, 6)</option></select></label>
+              <label>Digest z<input id="verify-z" type="number" min="0" max="31" step="1" value="8" disabled></label>
+              <label>Signature r<input id="verify-r" type="number" min="1" max="18" step="1" value="3" disabled></label>
+              <label>Signature s<input id="verify-s" type="number" min="1" max="18" step="1" value="12" disabled></label>
+            </div>
+            <output id="verify-result" class="result" aria-live="polite">Valid. R′.x mod 19 = 3.</output>
+            <figure class="figure"><canvas id="verify-plot" data-size="650 310" role="img" aria-label="The verifier’s two point multiples and their sum."></canvas><figcaption>Violet marks u₁G, gold marks u₂Q, and cyan marks their sum R′.</figcaption></figure>
+          </div>
+          <div class="table-scroll">
+            <table><caption>Four independent changes to the default example</caption><thead><tr><th scope="col">Changed input</th><th scope="col">u₁, u₂</th><th scope="col">R′</th><th scope="col">Comparison</th></tr></thead><tbody>
+              <tr><td>z = 9</td><td>15, 5</td><td>(0, 11)</td><td>0 differs from 3</td></tr>
+              <tr><td>r = 4</td><td>7, 13</td><td>(10, 6)</td><td>10 differs from 4</td></tr>
+              <tr><td>s = 13</td><td>5, 9</td><td>(13, 10)</td><td>13 differs from 3</td></tr>
+              <tr><td>Q = 8G = (13, 7)</td><td>7, 5</td><td>(7, 6)</td><td>7 differs from 3</td></tr>
+            </tbody></table>
+          </div>
+          <p>Changing z affects the generator term, changing r affects the key term and comparison target, changing s affects both weights, and changing Q changes the point the key weight multiplies. This tiny curve has chance coincidences. For instance z = 27 gives the same scalar residue as 8. A valid cryptographic check establishes validity for the digest and public key under the algorithm’s rules. Real-world identity, the semantics of a contract call, and whether someone understood a wallet prompt require their own checks.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why does 𝒪 cause rejection?</li><li><b>Calculation.</b> Independently recompute the row with s = 13.</li><li><b>Application.</b> A wallet claims verification passed. What would you still check before concluding Alice approved the displayed destination?</li></ol>
+            <details><summary>Hint</summary><p>13·3 ≡ 1 modulo 19. Find the generator step count before looking up its coordinates.</p></details>
+            <details><summary>Answer</summary><p>𝒪 has no X residue to compare. For s = 13, w = 3, u₁ = 24 mod 19 = 5, and u₂ = 9. The sum equals (5 + 9·7)G = 68G = 11G. Its X is 13. Separately establish the key’s connection to Alice and check that the signed bytes encode the destination shown by the wallet.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="verification-proof">
+          <h3><span class="chapter-number">13</span> Why the verification equation works</h3>
+          <p>Scalar multiplication is repeatable and distributive. That lets a verifier undo s by spreading its inverse across two known public terms. The proof shows why reconstructing R requires neither secret scalar.</p>
+          <ol class="flow" aria-label="Proof from scalar equation to point equation">
+            <li><strong>Signing</strong><span>s ≡ k⁻¹(z + rd) mod 19</span></li>
+            <li><strong>Multiply by k</strong><span>sk ≡ z + rd mod 19</span></li>
+            <li><strong>Apply the generator</strong><span>s(kG) = zG + r(dG)</span></li>
+            <li><strong>Substitute points</strong><span>sR = zG + rQ</span></li>
+          </ol>
+          <ol>
+            <li>Start with <code>s ≡ k⁻¹(z + rd) (mod n)</code>. Here s = 12, z = 8 and r = 3 are public, d = 7 and k = 4 are secret, and n = 19 is a public parameter. Multiply each side by k: <code>sk ≡ kk⁻¹(z + rd) ≡ z + rd</code>. Numerically 48 and 29 have the same residue 10.</li>
+            <li>Multiply G by both equal scalar residues. Adding 19 copies of G changes nothing, so <code>(sk)G = (z + rd)G</code>. Repeated addition and associativity allow regrouping: <code>s(kG) = zG + (rd)G = zG + r(dG)</code>.</li>
+            <li>By definition <code>kG = R</code> and <code>dG = Q</code>. Substitute to get <code>sR = zG + rQ</code>. Both sides are 10G = (7, 11): the right side is <code>8G + 3(7G) = 29G</code>.</li>
+            <li>Multiply the point equation by <code>w = s⁻¹ = 8 mod 19</code>. The left side <code>w(sR) = (ws)R = R</code> because R is in the subgroup and <code>ws ≡ 1</code>. The right side expands to <code>w(zG + rQ) = (wz)G + (wr)Q</code>. Reduce both coefficients modulo n to obtain <code>R′ = u₁G + u₂Q</code>.</li>
+          </ol>
+          <p>For an honestly formed signature relative to Q and z, the computed R′ is R. The transmitted X residue is enough to test the result. <strong>Analogy.</strong> Think of two public routes that must join at a checkpoint. The weights let you derive the meeting point from public data, and r is the part of its location you were told to expect. This algebra proves correctness of honest signatures. The argument for difficulty of forging new ones also involves the security of the group, hash, and implementation.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Which property allows w to act on both terms?</li><li><b>Calculation.</b> Find the scalar of each side after multiplying 10G by w.</li><li><b>Application.</b> Why can the proof use scalar reduction when multiplying R or Q?</li></ol>
+            <details><summary>Hint</summary><p>Look for 19 times the point on each side.</p></details>
+            <details><summary>Answer</summary><p>Scalar multiplication distributes over point addition in this abelian group. 8·10 = 80 ≡ 4 modulo 19, returning 4G. Both points are in the subgroup generated by G, so multiplying either by 19 gives 𝒪. A validation check ensures the verifier can make this assumption about external keys.</p></details>
+          </details>
+        </section>
+      </section>
+
+      <section class="part" id="recovery" aria-labelledby="recovery-title">
+        <p class="part-number">Part V</p>
+        <h2 id="recovery-title">Recover a public key</h2>
+        <p class="part-lead">Run the same point equation in a different direction. The missing information is which temporary point to use.</p>
+
+        <section class="chapter" id="recover-key">
+          <h3><span class="chapter-number">14</span> Recovering a candidate key from a signature</h3>
+          <p>Ordinary verification asks whether a known public key fits the signature. Recovery asks which public keys <em>could</em> fit when the key is absent. You still need the message digest z. Without it you cannot separate the digest term from the key term. You also need one proposed R that could have contributed r. The X test gives candidates for R, and a parity selector helps choose among them.</p>
+          <p>Start with <code>sR = zG + rQ</code>. Add the point inverse of zG to both sides: <code>sR − zG = rQ</code>. Since r is nonzero modulo prime n, compute <code>r⁻¹ mod n</code> and multiply both sides by it. The right-hand side becomes <code>(r⁻¹r)Q = Q</code> in the subgroup. Therefore <code>Q = r⁻¹(sR − zG)</code>. The inversion uses modulo 19, the subtraction is a group operation with coordinates modulo 17, and applying the result requires no secret scalar.</p>
+          <ol>
+            <li><strong>Find candidate R.</strong> Here <code>r = 3</code>, so x = 3 is the only coordinate candidate among 0…16. The cubic gives <code>27 + 6 + 2 = 35 ≡ 1 (mod 17)</code>. The roots are 1 and 16. Take the odd one to get <code>R = (3,1)</code>.</li>
+            <li><strong>Compute the two multiples.</strong> <code>sR = 12(4G) = 48G = 10G = (7,11)</code>. <code>zG = 8G = (13,7)</code>. Their step counts reduce modulo 19. Use the full point table or repeat the addition formulas to get the listed coordinates.</li>
+            <li><strong>Subtract.</strong> Negate (13, 7) to (13, 10) using <code>−7 mod 17 = 10</code>. Add to (7, 11): slope numerator is −1 and the run is 6, which has inverse 3 modulo 17. Thus λ ≡ −3 ≡ 14, x ≡ 196−7−13 ≡ 6, and y ≡ 14(7−6)−11 ≡ 3. This is <code>sR − zG = (6,3) = 2G</code>.</li>
+            <li><strong>Undo r.</strong> <code>3·13 = 39 = 2·19 + 1</code>, hence <code>r⁻¹ = 13</code>. <code>Q = 13(2G) = 26G = 7G = (0,6)</code>. The point matches the original public key and verifies against (3, 12) and z = 8.</li>
+          </ol>
+          <p>Validate candidate R and candidate Q as finite points in the required subgroup, and check the signature. A branch may yield no curve point, or a point calculation may give Q = 𝒪, which is an invalid public key. A candidate that verifies under its own key does not prove that it was the expected key. A trusted public key, an expected address, or a protocol that supplies recovery information can resolve the ambiguity.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Where does the digest enter the recovery equation?</li><li><b>Calculation.</b> What is r⁻¹ if r = 5 on this curve?</li><li><b>Application.</b> What extra evidence is needed to match a recovered public key to a known account?</li></ol>
+            <details><summary>Hint</summary><p>5·4 = 20. Think about what independently identifies the intended key.</p></details>
+            <details><summary>Answer</summary><p>It is the point being subtracted before inverting r. The inverse of 5 is 4 modulo 19. Match the candidate to a trusted public key or to the expected address with the protocol’s encoding and address rules. Verification against the newly invented candidate alone cannot establish that match.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="parity">
+          <h3><span class="chapter-number">15</span> One X coordinate, two Y coordinates</h3>
+          <p>On a real curve, a positive square has roots y and −y. Over a prime field of odd characteristic, if y is a nonzero root then its other representative is <code>p − y</code>. There can be at most two roots because <code>y₁² − y₂² = (y₁ − y₂)(y₁ + y₂)</code> and a field has no zero divisors. Some X values give no roots, and if the right-hand side is zero the only root is zero. Our toy curve has no such zero root. A modular square root solves a congruence. Enumerate 0…16 here. Large curves use number-theoretic algorithms.</p>
+          <p>For <code>R = (3,1)</code>, the other point is <code>−R = (3,16)</code> because 16² = 256 ≡ 1. The odd representative has <code>yParity = 1</code> and the even representative has <code>yParity = 0</code>. Parity means the lowest bit of the canonical field representative. Reducing after negating flips parity for nonzero Y because p is odd. This bit refers to the <em>temporary</em> R. The permanent public key Q in our example has even Y although the signing point has odd Y.</p>
+          <div class="compare">
+            <div><h4>Odd branch · (3, 1)</h4><p>12R gives 10G. Subtract 8G to get 2G, then multiply by 13 to get 7G = (0, 6).</p></div>
+            <div><h4>Even branch · (3, 16)</h4><p>R is now 15G. 12·15 ≡ 9 modulo 19, so subtracting 8G leaves G. Multiplying by 13 gives 13G = (16, 4), another verifying candidate.</p></div>
+          </div>
+          <div class="lab" id="recovery-lab">
+            <p class="lab-label">Experiment E</p>
+            <h4>Choose a recovery branch</h4>
+            <p>Uses the active signature from the signing and normalization labs. Change the selector to see whether a candidate matches the signer’s public point.</p>
+            <div class="controls">
+              <label>Temporary Y parity<select id="recover-parity"><option value="1">1 · Odd</option><option value="0">0 · Even</option></select></label>
+              <label>X branch<select id="recover-branch"><option value="0">x = r</option><option value="1">x = r + n</option></select></label>
+              <button id="recover-match" type="button">Use matching branch</button>
+            </div>
+            <output id="recover-result" class="result" aria-live="polite">Odd R = (3, 1) recovers Q = (0, 6).</output>
+            <figure class="figure"><canvas id="recover-plot" data-size="650 310" role="img" aria-label="Both Y roots at the candidate X coordinate and the recovered public key."></canvas><figcaption>Gold marks the selected R, the outlined point is the other Y root, and cyan marks the recovered Q.</figcaption></figure>
+          </div>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why can the alternate branch pass verification?</li><li><b>Calculation.</b> Find the roots at x = 5 on the toy curve and label their parities.</li><li><b>Application.</b> If you choose parity from the signer’s permanent key, will this default example recover that key?</li></ol>
+            <details><summary>Hint</summary><p>At x = 5 the target residue is 1. Compare G and −G.</p></details>
+            <details><summary>Answer</summary><p>The alternate R shares the same X. Recovery chooses a different Q to satisfy the equation for that R. The roots at x = 5 are 1 (odd) and 16 (even). Using Q’s even parity for the original signature chooses (3, 16) and recovers (16, 4), which differs from Q.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="recovery-id">
+          <h3><span class="chapter-number">16</span> Recovery IDs and Ethereum transaction parity</h3>
+          <p>The signature records <code>r = R.x mod n</code>. In general enumerate every <code>x = r + j·n</code> in the range 0…p−1, where the nonnegative integer <code>j</code> says how many whole scalar cycles were removed from the field coordinate. On our toy curve j = 0 is the only possible option because p = 17 &lt; n = 19. Even that candidate can be out of range for malformed data. On secp256k1, <code>n &lt; p &lt; 2n</code>, so j can be 0 or 1. The second branch is possible only when <code>r + n &lt; p</code> and that coordinate has a valid square root.</p>
+          <p>The interval <code>[n,p)</code> occupies roughly <code>3.7 × 10⁻³⁹</code> of the field, about 2⁻¹²⁸. This interval fraction gives the scale of the rare case. The exact probability uses the count of actual affine points with X in the interval. In libsecp256k1’s recovery convention the two-bit ID is <code>2j + yParity</code>. The low bit chooses the Y root. The high bit records whether n was removed from X. Ethereum transaction formats carry the Y bit and use the ordinary X branch, so a signature needing j = 1 cannot be represented as a transaction signature for that key using only that bit. <a href="https://www.secg.org/sec2-v2.pdf">SEC 2 parameters</a> · <a href="https://github.com/bitcoin-core/secp256k1/blob/master/src/modules/recovery/main_impl.h">libsecp256k1 recovery implementation</a>.</p>
+          <div class="table-scroll">
+            <table><caption>Three Ethereum representations of parity</caption><thead><tr><th scope="col">Transaction form</th><th scope="col">Encoding</th><th scope="col">Example</th></tr></thead><tbody>
+              <tr><td>Unprotected legacy</td><td>v = 27 + yParity</td><td>Even gives v = 27. Odd gives 28.</td></tr>
+              <tr><td>EIP-155 legacy</td><td>v = 35 + 2·chain ID + yParity</td><td>For chain ID 1, even gives 37 and odd gives 38.</td></tr>
+              <tr><td>Typed transaction, e.g. EIP-1559</td><td>yParity directly as integer 0 or 1, with a separate signed chain ID</td><td>Type 0x02, chain ID 1 and parity 0 use distinct fields.</td></tr>
+            </tbody></table>
+          </div>
+          <p>The <a href="https://eips.ethereum.org/EIPS/eip-155">EIP-155 example</a> signs a legacy transfer on chain ID 1 and gets v = 37. Subtract 35 + 2 = 37 and you get parity 0. This means the even Y of the recovery point. The chain ID also changes the signing preimage. EIP-1559 instead defines its own typed serialization and places the bit in an explicit field. <a href="https://eips.ethereum.org/EIPS/eip-1559">EIP-1559</a>.</p>
+          <p>When a signer returns only (r, s), first decide which form the destination protocol will encode. With the original digest and trusted full public key, recover candidates using each supported X branch and each parity, and compare the full points. Alternatively verify against the known key, retain <code>R′ = s⁻¹(zG + rQ)</code>, and inspect its X branch and Y parity. If the destination format cannot represent the matching branch, the integration needs a newly generated suitable signature or must report the failure. In Chapter 18 you will see why computing the selector after normalization avoids keeping the old Y bit.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why is one bit insufficient for generic secp256k1 recovery?</li><li><b>Calculation.</b> What EIP-155 legacy v encodes odd parity on chain ID 5?</li><li><b>Application.</b> Your HSM gives r and s and your API asks for Ethereum parity. What public data lets you calculate it?</li></ol>
+            <details><summary>Hint</summary><p>One choice is for X and another for Y. Use the digest and trusted point to resolve both.</p></details>
+            <details><summary>Answer</summary><p>Parity only chooses between two roots at a selected X. The generic X ambiguity requires an additional selector. The chain example gives 35 + 2·5 + 1 = 46. Use the signing digest, the final (r, s), and the signer’s known public key to recover and match candidates, checking the Ethereum-representable branch.</p></details>
+          </details>
+        </section>
+      </section>
+
+      <section class="part" id="low-s" aria-labelledby="low-s-title">
+        <p class="part-number">Part VI</p>
+        <h2 id="low-s-title">The two faces of s</h2>
+        <p class="part-lead">See why the same mathematical signature check admits two forms, and why systems often choose one.</p>
+
+        <section class="chapter" id="s-boundary">
+          <h3><span class="chapter-number">17</span> High-S and Low-S</h3>
+          <p>Modulo n, every nonzero scalar s has an additive inverse <code>−s mod n = n − s</code>. They are distinct because n is odd, and one lies below the midpoint. To choose a canonical representative, define <strong>Low-S</strong> as <code>1 ≤ s ≤ floor(n/2)</code>. The floor rounds down the half-order, 19/2 = 9.5, to 9. Values 10…18 are <strong>High-S</strong>. These are public scalars, so testing this boundary does not require a secret operation.</p>
+          <p>Our signature (3, 12) is High-S because 12 &gt; 9. To normalize, keep r = 3 and replace s by <code>s′ = 19 − 12 = 7</code>. The normalized pair is (3, 7). If an input is already Low-S, it stays as it is. The math behind why this preserves ordinary validity comes next.</p>
+          <div class="lab" id="normalization-lab">
+            <p class="lab-label">Experiment F</p>
+            <h4>Normalize and compare</h4>
+            <p>Choose the active representation. This updates the verification and recovery labs when they use signing values.</p>
+            <div class="controls"><label>Signature form<select id="s-form"><option value="original">Original s</option><option value="low">Canonical Low-S</option><option value="other">Other form (n − s)</option></select></label></div>
+            <output id="normalize-result" class="result" aria-live="polite">Original (3, 12), odd Y. Low-S is (3, 7), even Y.</output>
+            <figure class="figure"><canvas id="normalize-plot" data-size="650 310" role="img" aria-label="Original and active nonce point under S normalization."></canvas><figcaption>The selected form highlights its effective R in gold. The outline marks the other possible Y coordinate.</figcaption></figure>
+          </div>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why does choosing one side of the midpoint define a unique representative?</li><li><b>Calculation.</b> Normalize (8, 18) and (8, 9).</li><li><b>Application.</b> Will a second normalization change the first result?</li></ol>
+            <details><summary>Hint</summary><p>For one member of a valid pair, s + (19 − s) is always 19.</p></details>
+            <details><summary>Answer</summary><p>The two scalars straddle 9.5. The results are (8, 1) and (8, 9). Normalization is idempotent: every output already lies in the low interval.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="s-proof">
+          <h3><span class="chapter-number">18</span> Why both signatures verify</h3>
+          <p>The original valid pair satisfies <code>sR = zG + rQ</code>. A point negative and a scalar negative are different operations. <code>−R</code> changes the Y coordinate modulo p. <code>−s</code> changes the step count modulo n. When both signs flip, they cancel: <code>(−s)(−R) = sR</code>. To see it by generator counts, put R = kG, so both negations give <code>((−s)(−k))G = (sk)G</code>. The point X is unchanged, so r is unchanged.</p>
+          <div class="table-scroll">
+            <table><caption>The two verifying paths with the same digest and public key</caption><thead><tr><th scope="col">Form</th><th scope="col">s and inverse w</th><th scope="col">Reconstructed R′</th><th scope="col">Recovery parity</th></tr></thead><tbody>
+              <tr><td>Original (3, 12)</td><td>12 has inverse 8</td><td>4G = (3, 1)</td><td>1</td></tr>
+              <tr><td>Normalized (3, 7)</td><td>7 has inverse 11</td><td>15G = (3, 16)</td><td>0</td></tr>
+            </tbody></table>
+          </div>
+          <p>For the second row, <code>7·11 = 77 ≡ 1</code> modulo 19 and <code>11 ≡ −8</code>. Then <code>u₁ = 8·11 ≡ 12</code>, <code>u₂ = 3·11 ≡ 14</code> and the sum is <code>(12 + 14·7)G = 110G = 15G</code>. It passes the same X test. The recovery calculation uses <code>7·15 ≡ 10</code>, so it obtains the same 10G − 8G = 2G and the same 13(2G) = 7G as before. The parity must change from odd to even when s changes. In a full recovery ID, the X branch stays fixed since negation only changes Y.</p>
+          <p><strong>Analogy.</strong> Turn around and walk the same number of steps backwards. Two sign reversals leave the destination unchanged. Here “turning around” means taking the point inverse, and “backwards” means the negative group multiplier.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why can normalizing s leave the recovery X branch alone?</li><li><b>Calculation.</b> Compute 7·15 and 12·4 modulo 19.</li><li><b>Application.</b> What happens if an encoder flips s but keeps the old yParity?</li></ol>
+            <details><summary>Hint</summary><p>Look at the selected R in the recovery formula before computing Q.</p></details>
+            <details><summary>Answer</summary><p>Point negation preserves X. Both products reduce to 10. In the default example the stale odd selector with s = 7 returns the alternate public key (16, 4). Ordinary verification with an already known Q accepts either form without being given a parity bit.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="malleability">
+          <h3><span class="chapter-number">19</span> Signature malleability in a transaction</h3>
+          <p>Imagine Alice broadcasts a legacy Bitcoin spend with an ECDSA signature inside its input script. Someone who sees the signed bytes can compute <code>n − s</code> from the public s, re-encode the signature, and preserve its mathematical validity for the same digest and key. The person has made an alternative representation of an already authorized spend. Changing the covered recipient or amount would require a valid signature for the changed digest.</p>
+          <ol class="flow" aria-label="Effect of signature malleability on a legacy transaction">
+            <li><strong>Original spend</strong><span>Contains an encoded (r, s) in the signature script.</span></li>
+            <li><strong>Public transformation</strong><span>Replace it with a correctly encoded (r, n − s).</span></li>
+            <li><strong>Same ECDSA check</strong><span>The reconstructed point is negated. Its X still matches r.</span></li>
+            <li><strong>Different bytes</strong><span>A legacy transaction ID includes the input script, so it can change.</span></li>
+          </ol>
+          <p>A canonical Low-S rule accepts one of the two scalar representatives, removing this particular transformation where enforced. Different valid nonces can still produce different signatures. Other transaction fields, script freedoms, or sighash modes may allow other mutations. Canonicalization does not turn a random nonce generator into a deterministic one.</p>
+          <p>In Bitcoin, <strong>consensus</strong> governs what can appear in a valid block. <strong>Relay policy</strong> governs what a node normally accepts into its mempool and forwards. Strict DER is a consensus rule for relevant ECDSA script checks. Bitcoin Core’s standard relay flags enforce Low-S for ECDSA, but High-S by itself does not invalidate such a spend under Bitcoin’s consensus rules. For SegWit, <code>txid</code> is computed from the serialization without witness, while <code>wtxid</code> includes witness. Changing a witness signature can change wtxid even though txid stays fixed. A mixed transaction can still have non-witness inputs whose scriptSig bytes contribute to txid. <a href="https://bips.dev/66/">BIP 66</a> · <a href="https://bips.dev/141/">BIP 141</a> · <a href="https://github.com/bitcoin/bitcoin/blob/master/src/policy/policy.h">Bitcoin Core policy flags</a>.</p>
+          <p>Ethereum’s Homestead rules make High-S transaction signatures invalid at consensus. Its <code>ecrecover</code> precompile retains acceptance of High-S, so smart-contract signature processing can have different acceptance rules from transaction validation. <a href="https://eips.ethereum.org/EIPS/eip-2">EIP-2</a>.</p>
+          <p>A library can impose its own acceptance rule too. The public libsecp256k1 ECDSA signing API produces Low-S, and its ordinary verify API rejects High-S. An application that needs ordinary mathematical ECDSA verification of either form can normalize before calling that verifier. An application that enforces a protocol’s Low-S rule should check the received form before doing any conversion. <a href="https://github.com/bitcoin-core/secp256k1/blob/master/include/secp256k1.h">libsecp256k1 signature normalization and verification API</a>.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why does S malleability leave the original authorization intact?</li><li><b>Calculation.</b> On the toy curve, what is the only other s for s = 2 with this transformation?</li><li><b>Application.</b> Which IDs may change if only a SegWit witness signature changes?</li></ol>
+            <details><summary>Hint</summary><p>Check which serialization each identifier hashes.</p></details>
+            <details><summary>Answer</summary><p>The digest and key stay fixed and the X check survives. The other scalar is 17. The witness transaction ID can change. The ordinary txid is unchanged because it omits the witness.</p></details>
+          </details>
+        </section>
+
+        <aside class="challenge"><h4>Cumulative challenge</h4><p>Start with (3, 12) and parity 1. Normalize, verify, and recover without looking up the answer. Keep a ledger of which steps use 17 and which use 19.</p><details><summary>Hint</summary><p>Negation changes the nonce point from 4G to 15G. The point’s Y representative wraps at 17.</p></details><details><summary>Solution</summary><p>The result is (3, 7) with parity 0. The verifier uses (u₁,u₂) = (12,14) and gets 15G with X = 3. Recovery computes 13(7·15G − 8G) = 13(2G) = 7G. The scalar coefficients wrap at 19. All point operations wrap their coordinates at 17.</p></details></aside>
+      </section>
+
+      <section class="part" id="nonce-security" aria-labelledby="nonce-security-title">
+        <p class="part-number">Part VII</p>
+        <h2 id="nonce-security-title">What keeps the key secret</h2>
+        <p class="part-lead">Work through two failure cases where an attacker gets enough information to turn a difficult group problem into easy scalar arithmetic.</p>
+
+        <section class="chapter" id="key-secrecy">
+          <h3><span class="chapter-number">20</span> Why publishing (r, s) leaves d hidden</h3>
+          <p>Anyone can see r and s and usually the digest z and public key Q. They know the curve, the generator, and both moduli. From <code>s ≡ k⁻¹(z + rd)</code> modulo n, multiply by k to get <code>sk ≡ z + rd</code>. Subtract z to get <code>sk − z ≡ rd</code>. Multiply by the inverse of r to get:</p>
+          <p class="formula">d ≡ r⁻¹(sk − z) (mod n)</p>
+          <p>In the toy example the public values are r = 3, s = 12, z = 8, and n = 19. The formula still needs secret k = 4. The scalar equation by itself allows many solutions when both d and k are unknown. Public Q and reconstructed R impose group equations that determine the scalars, but solving those group equations is the hard part. Reconstructing a point gives coordinates. To recover k you need its step count from G.</p>
+          <div class="compare">
+            <div><h4>Public calculation</h4><p>Given Q and the signature, compute R′ with two scalar multiplications and an addition. For the original example it is (3, 1).</p></div>
+            <div><h4>Discrete logarithm</h4><p>Given R = (3, 1) and G, find k such that kG = R. The toy table gives 4. secp256k1’s cycle is too large for comparable classical search.</p></div>
+          </div>
+          <p>The key is hidden in a computational sense. Someone with enough computational power to find a discrete logarithm could recover it, including directly from Q. Real security assumes an appropriately sized well-studied group, correct implementations, and secret, well-generated nonces. An implementation flaw can change the information available to an attacker without changing the curve at all.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why is reconstructing R easier than recovering k?</li><li><b>Calculation.</b> From the toy table, which nonce produced R = (10, 11)?</li><li><b>Application.</b> Does the existence of exactly one scalar for a public point imply anyone can efficiently find it?</li></ol>
+            <details><summary>Hint</summary><p>One calculation evaluates known point multiples. The other inverts the map.</p></details>
+            <details><summary>Answer</summary><p>Verification already knows the two weights needed to compute R. Finding k requires a discrete logarithm. (10, 11) is 16G. Uniqueness tells you an answer exists in the allowed range. It gives no efficient way to compute it.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="nonce-leak">
+          <h3><span class="chapter-number">21</span> A single revealed nonce</h3>
+          <p>Imagine a signing process records the secret nonce alongside the signature during debugging. If the log exposes the nonce corresponding to the signature’s representation, the unknown in the preceding formula disappears. The attacker only needs public r, s, z and the leaked k.</p>
+          <ol class="flow" aria-label="Deriving the key when k is exposed">
+            <li><strong>Leaked scalar</strong><span>k = 4 matches the original parity and s = 12.</span></li>
+            <li><strong>Remove the digest</strong><span>sk − z = 12·4 − 8 = 40 ≡ 2.</span></li>
+            <li><strong>Undo r</strong><span>r⁻¹ = 13 since 3·13 ≡ 1.</span></li>
+            <li><strong>Private key exposed</strong><span>13·2 = 26 ≡ 7 modulo 19.</span></li>
+          </ol>
+          <p>All of this is scalar arithmetic modulo n. The public check <code>7G = (0,6)</code> confirms the result. If the sender published normalized s = 7, the corresponding effective nonce is <code>−4 mod 19 = 15</code>. Consistently using either pair gives the same private key. Even if an HSM never exports its private key object, a leaked nonce can compromise the mathematical secret.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why does one leaked nonce suffice?</li><li><b>Calculation.</b> Repeat the calculation with s = 7 and k = 15.</li><li><b>Application.</b> Would avoiding future debug logging repair the key whose nonce was exposed?</li></ol>
+            <details><summary>Hint</summary><p>7·15 ≡ 12·4 modulo 19.</p></details>
+            <details><summary>Answer</summary><p>The scalar equation then has one unknown and the coefficient r is invertible. 105 − 8 = 97 ≡ 2, and 13·2 ≡ 7. Preventing another leak protects future operations. The already compromised key must be treated as compromised.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="nonce-reuse">
+          <h3><span class="chapter-number">22</span> Two signatures with the same nonce</h3>
+          <p>Imagine two distinct digests signed under the same key d = 7 with k = 4. The first digest is <code>z₁ = 8</code> and its signature is <code>(3, 12)</code>. The second is <code>z₂ = 9</code>. R again equals (3, 1) so <code>r = 3</code> remains fixed. The second s is <code>s₂ = 5(9 + 3·7) ≡ 17</code> modulo 19. The public signatures contain two different digest equations with the same secret term rd.</p>
+          <ol>
+            <li>Multiply both signing equations by k: <code>s₁k ≡ z₁ + rd</code> and <code>s₂k ≡ z₂ + rd</code>, both modulo n. Numerically <code>12·4 ≡ 8 + 3·7</code> and <code>17·4 ≡ 9 + 3·7</code>.</li>
+            <li>Subtract the second from the first. Distributivity gives <code>(s₁ − s₂)k ≡ z₁ − z₂</code>. The whole rd term cancels, even though nobody outside the signer knew d.</li>
+            <li>Compute the public differences <code>s₁ − s₂ = −5 ≡ 14</code> and <code>z₁ − z₂ = −1 ≡ 18</code>. Because <code>14·15 = 210 = 11·19 + 1</code>, the inverse of 14 is 15. So <code>k ≡ (z₁ − z₂)(s₁ − s₂)⁻¹ ≡ (−1)·15 ≡ 4</code>.</li>
+            <li>Use the key formula: <code>d ≡ 13(12·4 − 8) ≡ 13·2 ≡ 7</code>. Check its public point against Q.</li>
+          </ol>
+          <p><strong>Analogy.</strong> If two receipts share one hidden fee, subtracting their totals cancels it. Here subtraction cancels the private-key term first, leaving an equation for the shared nonce. A wallet’s public signatures can provide both equations without leaking a nonce in plain text.</p>
+          <p>With canonical Low-S, the visible s values could be 7 and 2. Each may represent either sign of its original scalar. Candidate analysis must account for the signs and verify the result against the known public key. Both signs reversed together can give <code>−k mod n</code> with the same d. Equal r alone does not prove identical nonce scalars: opposite points share X, and the generic r+n branch can also share a residue. If the digest residues coincide, subtracting the corresponding same-nonce equations supplies no new information. If a candidate s difference is zero, there is no inverse for that branch.</p>
+          <div class="lab" id="reuse-lab">
+            <p class="lab-label">Experiment G · Toy curve only</p>
+            <h4>Reuse one nonce for two digests</h4>
+            <p>The first digest, d, and k come from the signing lab. Change the second digest or normalize the observed signatures and inspect all viable sign choices.</p>
+            <div class="controls">
+              <label>Second digest z₂<input id="reuse-z" type="number" min="0" max="31" step="1" value="9"></label>
+              <label class="check"><input id="reuse-low" type="checkbox"> Observe Low-S signatures</label>
+            </div>
+            <output id="reuse-result" class="result" aria-live="polite">With (3, 12) and (3, 17), subtraction reveals k = 4 and d = 7.</output>
+          </div>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> What disappears when you subtract the equations?</li><li><b>Calculation.</b> Why does the calculation stall for z₁ = 8 and z₂ = 27?</li><li><b>Application.</b> Why compare a recovered secret’s public point to the trusted public key?</li></ol>
+            <details><summary>Hint</summary><p>Both arithmetic differences live modulo 19. A guessed S sign may be wrong.</p></details>
+            <details><summary>Answer</summary><p>The shared rd term cancels. 8 and 27 are the same residue, so this supplies the same equation twice and gives no inverse of the same-sign s difference. Matching dG distinguishes a key that fits the known signer from other algebraic candidates.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="deterministic">
+          <h3><span class="chapter-number">23</span> Deterministic signing and other failures</h3>
+          <p>Randomized ECDSA requires an unpredictable, almost-uniform choice in 1…n−1 on every signing. If a random generator restarts with old state, or its output is biased, the nonce distribution can expose information. A source that appears noisy to a human can still be too predictable.</p>
+          <p><strong>RFC 6979</strong> specifies deterministic nonce derivation using an HMAC-based generator seeded with representations of the private scalar and the hashed message input. HMAC is a keyed hash-based construction. The procedure extracts candidate bits, checks the candidate’s range, and advances its state when it rejects a candidate. The same key, signing input, hash procedure and options give the same result. Different effective inputs produce different derived streams with cryptographically negligible collision chances under the intended assumptions. The stream is secret because it depends on d. This is a reproducible derivation, while a fixed constant k discards the message dependence completely. Some implementations additionally mix extra entropy or use a different approved nonce method. <a href="https://www.rfc-editor.org/rfc/rfc6979.html">RFC 6979</a>.</p>
+          <div class="compare">
+            <div><h4>Illustrative incident</h4><p>A signer running from a restored machine snapshot resumes a pseudorandom generator at the same state. It processes different hashes and repeats a nonce. That gives the two equations in Chapter 22.</p></div>
+            <div><h4>Documented incident</h4><p>In August 2013, Bitcoin.org disclosed an Android randomness vulnerability affecting Android wallet software. The advisory links the weakness to insecure wallet keys and describes rotating affected keys after updating. <a href="https://bitcoin.org/en/alert/2013-08-11-android">Android security advisory</a>.</p></div>
+          </div>
+          <p>Some leaks provide only a fraction of the nonce through timing, cache behavior, electromagnetic measurements, or faulty arithmetic. Across many signatures, partial leaks or bias can constrain the secret enough for specialized mathematical attacks. Constant-time operations and protections against physical side channels matter even when nonce derivation is deterministic. HSM-backed signing can limit access to keys and signing code. Its firmware, randomness, partition policy, and application still influence security. Low-S only selects a signature representative after the nonce-dependent operation. It cannot repair an information leak during signing.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why might signing the same digest twice intentionally produce identical signatures?</li><li><b>Calculation.</b> What new equation do two identical signatures on the same digest give you?</li><li><b>Application.</b> Which problem can remain even if deterministic derivation eliminates dependence on a fragile random source during signing?</li></ol>
+            <details><summary>Hint</summary><p>Deterministic input includes the secret key. Repeating one equation twice does not increase its information.</p></details>
+            <details><summary>Answer</summary><p>A deterministic procedure replays the same derived nonce and signature for the same inputs. Subtraction gives zero equals zero. Side-channel leakage, fault injection, and unauthorized access to a signing operation are separate problems.</p></details>
+          </details>
+        </section>
+      </section>
+
+      <section class="part" id="applications" aria-labelledby="applications-title">
+        <p class="part-number">Part VIII</p>
+        <h2 id="applications-title">secp256k1 in practice</h2>
+        <p class="part-lead">Scale up the same point operations, then follow the bytes through libraries, transactions, and an HSM.</p>
+
+        <section class="chapter" id="parameters">
+          <h3><span class="chapter-number">24</span> From 19 points to secp256k1</h3>
+          <p>The real curve changes the parameters and scale. Its equation is <code>y² ≡ x³ + 7 (mod p)</code> because a = 0 and b = 7. The field prime controls the range of X and Y. The group order controls how many G additions return to 𝒪. Both are near 2²⁵⁶, and they count different things. Private keys are sampled in 1…n−1 and can be represented in 32 bytes. Public keys remain points.</p>
+          <div class="table-scroll">
+            <table><caption>Public domain parameters from SEC 2 §2.4.1. Long integers are hexadecimal.</caption><thead><tr><th scope="col">Parameter</th><th scope="col">Value</th><th scope="col">Purpose</th></tr></thead><tbody>
+              <tr><th scope="row">p</th><td><code class="hex">FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F</code></td><td>Field modulus, 2²⁵⁶ − 2³² − 977.</td></tr>
+              <tr><th scope="row">a, b</th><td><code>0, 7</code></td><td>Coefficients of x and the constant term.</td></tr>
+              <tr><th scope="row">G.x</th><td><code class="hex">79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798</code></td><td>Generator’s X coordinate.</td></tr>
+              <tr><th scope="row">G.y</th><td><code class="hex">483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8</code></td><td>Generator’s even Y coordinate.</td></tr>
+              <tr><th scope="row">n</th><td><code class="hex">FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141</code></td><td>Prime order of the generator.</td></tr>
+              <tr><th scope="row">h</th><td><code>1</code></td><td>Cofactor. The full curve group has n points, including 𝒪.</td></tr>
+            </tbody></table>
+          </div>
+          <p>The toy cofactor is also 1, so its 19 points form the full cycle. The same chord, tangent, scalar, and signature rules apply on secp256k1. The scale rules out enumerating valid coordinates or walking the cycle to find a secret. Double-and-add still grows with the bit length. A generic discrete logarithm search grows with roughly the square root of the order, on the scale of 2¹²⁸ group operations for secp256k1. Curve-specific implementation choices can change constants. <a href="https://www.secg.org/sec2-v2.pdf">SEC 2 §2.4.1</a> · <a href="https://www.secg.org/sec1-v2.pdf">SEC 1</a>.</p>
+          <p>To orient yourself in a real implementation, look for separate <em>field element</em> and <em>scalar</em> types. A field element represents a residue modulo p. A scalar represents a residue modulo n. Performance code often holds points in projective coordinates so several operations can proceed before doing a field inversion, and uses specialized multiplication schedules for secret and public inputs. In libsecp256k1, the recovery module rebuilds the field X and Y from the recovery ID, then performs a point linear combination using scalar inverses. Those operations map directly to Chapters 12 and 14. <a href="https://github.com/bitcoin-core/secp256k1/blob/master/src/modules/recovery/main_impl.h">libsecp256k1 recovery source</a> · <a href="https://github.com/bitcoin-core/secp256k1/blob/master/src/ecdsa_impl.h">ECDSA implementation</a>.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> What does the cofactor of 1 tell you?</li><li><b>Calculation.</b> How many bytes represent a 256-bit coordinate?</li><li><b>Application.</b> In a library, which type should hold the inverse of s?</li></ol>
+            <details><summary>Hint</summary><p>The order of G counts its entire cycle. Distinguish the two residue domains.</p></details>
+            <details><summary>Answer</summary><p>The generator cycle covers the full curve group. A fixed-width coordinate uses 32 bytes. The inverse of s belongs to the scalar type modulo n even when its bit width matches a field element.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="key-encoding">
+          <h3><span class="chapter-number">25</span> Serialize a public point</h3>
+          <p>A public point exists before it is serialized. SEC 1 encodes field coordinates as big-endian bytes. On secp256k1, X and Y are each exactly 32 bytes, including leading zeros if needed. The uncompressed form starts with byte <code>04</code> and includes both. The compressed form uses <code>02</code> for even Y or <code>03</code> for odd Y, then X. The decoder checks X, computes a square root of the cubic, selects the canonical Y of the indicated parity, and validates the resulting point.</p>
+          <div class="byte-layout" aria-label="Uncompressed secp256k1 generator byte layout">
+            <span><b>Uncompressed prefix</b><code>04</code></span><span><b>32-byte X</b><code>79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798</code></span><span><b>32-byte Y</b><code>483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8</code></span>
+          </div>
+          <div class="byte-layout" aria-label="Compressed secp256k1 generator byte layout">
+            <span><b>Even-Y prefix</b><code>02</code></span><span><b>Same 32-byte X</b><code>79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798</code></span>
+          </div>
+          <p>This is the published generator G, which is also the public point for the test scalar 1. Its negative would have prefix 03 with the same X. In this section the bit describes the Y of the serialized public point. In signature recovery the bit describes the Y of the temporary point R. Those points play different roles and can have different parities. <a href="https://www.secg.org/sec1-v2.pdf">SEC 1 point-to-octet conversion</a> · <a href="https://www.secg.org/sec2-v2.pdf">SEC 2 generator encoding</a>.</p>
+          <div class="lab" id="compression-lab">
+            <p class="lab-label">Experiment H</p>
+            <h4>Decompress a public point</h4>
+            <p>Try X = 0 with even Y to reconstruct the running public key. Change to odd Y to get its inverse. Try X = 1 to see a field value with no Y root.</p>
+            <div class="controls">
+              <label>X coordinate<input id="compress-x" type="number" min="0" max="16" step="1" value="0"></label>
+              <label>Public point prefix<select id="compress-parity"><option value="0">02 · Even</option><option value="1">03 · Odd</option></select></label>
+            </div>
+            <output id="compress-result" class="result" aria-live="polite">X = 0 with prefix 02 selects (0, 6).</output>
+            <figure class="figure"><canvas id="compress-plot" data-size="650 310" role="img" aria-label="The selected decompressed point and the other root at the same X."></canvas><figcaption>Cyan identifies the selected public point. The outline marks the opposite parity.</figcaption></figure>
+          </div>
+          <p>Addresses encode protocol-specific information about where funds are controlled. A typical Bitcoin P2PKH or P2WPKH spend uses <code>HASH160</code>, meaning RIPEMD-160 of SHA-256 of serialized public-key bytes. The address encoding and locking script differ by output type. Hashing compressed and uncompressed encodings can yield different results for the same point. Ethereum externally owned account addresses take the last 20 bytes of Keccak-256 over the 64-byte public X||Y, without the 04 prefix. Q’s encoded bytes can reproduce these identifiers. An address generally cannot supply the original public key on its own. <a href="https://bips.dev/141/">Bitcoin witness programs</a> · <a href="https://github.com/ethereum/yellowpaper/blob/master/Paper.tex">Ethereum Yellow Paper, account identifiers</a>.</p>
+          <div class="compare">
+            <div><h4>Bitcoin P2PKH from G</h4><p>HASH160 of the compressed key is <code>751e76e8199196d454941c45d1b3a323f1433bd6</code>. Mainnet Base58Check adds a version byte and checksum, giving <code>1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH</code>.</p></div>
+            <div><h4>Ethereum account from G</h4><p>Keccak-256 of X||Y ends with <code>7e5f4552091a69125d5dfcb7b8c2659029395bdf</code>. Render those 20 bytes as <code>0x7e5f4552091a69125d5dfcb7b8c2659029395bdf</code>. Both identifiers here use a publicly known test key.</p></div>
+          </div>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why does a single bit usually suffice for point decompression?</li><li><b>Calculation.</b> How long are the compressed and uncompressed encodings on secp256k1?</li><li><b>Application.</b> A service has a 33-byte SEC 1 key and must derive an Ethereum account. What bytes should it hash?</li></ol>
+            <details><summary>Hint</summary><p>Include the format prefix when counting encoded bytes. The Ethereum input omits it.</p></details>
+            <details><summary>Answer</summary><p>At a chosen X there are at most two roots with opposite parity when Y is nonzero. The lengths are 33 and 65 bytes. Decompress, concatenate the fixed-width X and Y values, and use Keccak-256 on those 64 bytes.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="signature-encoding">
+          <h3><span class="chapter-number">26</span> Represent the same signature in bytes</h3>
+          <p>ECDSA produces the integer pair (r, s). Encoding is a separate choice. Knowing the bytes’ format tells you where each scalar begins, how to handle sign and padding, and whether any protocol metadata accompanies the pair.</p>
+          <div class="table-scroll">
+            <table><caption>What on-wire signature formats carry</caption><thead><tr><th scope="col">Format</th><th scope="col">Stores</th><th scope="col">Supplied separately</th></tr></thead><tbody>
+              <tr><td>Raw r || s</td><td>Unsigned big-endian r and s padded to 32 bytes each for secp256k1.</td><td>Digest, public key or recovery metadata, and protocol context.</td></tr>
+              <tr><td>ASN.1 DER</td><td>A SEQUENCE with two minimally encoded, positive INTEGERs.</td><td>Digest and key or recovery metadata.</td></tr>
+              <tr><td>Bitcoin ECDSA stack element</td><td>DER plus one sighash-type byte, e.g. 01 for SIGHASH_ALL.</td><td>Input and previous-output context, public key as required by the script.</td></tr>
+              <tr><td>Ethereum transaction</td><td>r, s, and a typed parity field or legacy v, encoded with the transaction fields.</td><td>Protocol’s signing preimage construction and validation rules.</td></tr>
+            </tbody></table>
+          </div>
+          <p>DER INTEGERs are signed, so if a scalar’s highest used bit is 1, prefix one zero byte. Strip unnecessary leading zeros. The toy integers (3, 12) have magnitudes 03 and 0c. Their DER encoding is:</p>
+          <div class="byte-layout" aria-label="DER encoding for r equals 3 and s equals 12">
+            <span><b>Sequence and content length</b><code>30 06</code></span><span><b>INTEGER tag, length, r</b><code>02 01 03</code></span><span><b>INTEGER tag, length, s</b><code>02 01 0c</code></span>
+          </div>
+          <p>If r were the illustrative integer <code>0x80</code> and s were 1, the byte layout would be <code>30 07 02 02 00 80 02 01 01</code>. The <code>00</code> keeps r positive and raises the sequence payload length from six to seven bytes. This is an encoding example with chosen integers. It makes no claim about validity under a given key and digest.</p>
+          <p>For a secp256k1 example, the EIP-155 reference signature has raw components shown below. Both fit in 32 DER magnitude bytes and neither needs a sign pad. To convert, place a <code>02 20</code> integer tag and length before each component. Prefix the result with <code>30 44</code> because 2 × (2 + 32) = 68 bytes. To decode, read the sequence and two integers, enforce canonical positivity and range, and left-pad each to 32 bytes to get the raw form. The Ethereum example’s legacy v = 37 is separate from these bytes. <a href="https://eips.ethereum.org/EIPS/eip-155">EIP-155 signature vector</a> · <a href="https://bips.dev/66/">Bitcoin DER rules</a>.</p>
+          <div class="byte-layout" aria-label="Raw r and s from the EIP-155 reference vector">
+            <span><b>r · 32 bytes</b><code>28ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590620aa636276</code></span>
+            <span><b>s · 32 bytes</b><code>67cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83</code></span>
+          </div>
+          <p>Low-S normalization changes the scalar representation before encoding it. Adding a sighash byte requires knowing how the digest was constructed. Adding parity to raw or DER signatures requires the relevant recovery metadata, or the digest and known key to derive it. Converting the Ethereum signature bytes to DER does not make them valid for a Bitcoin spend. The protocols covered different messages.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why might the same integer occupy 32 bytes in raw format and 33 in DER?</li><li><b>Calculation.</b> Encode r = 1, s = 128 in minimal DER.</li><li><b>Application.</b> Can a raw HSM pair tell you whether it was signed using SIGHASH_ALL?</li></ol>
+            <details><summary>Hint</summary><p>The top bit of 80 would mark a negative ASN.1 INTEGER without a pad.</p></details>
+            <details><summary>Answer</summary><p>Fixed-width raw encoding is unsigned. DER adds a sign pad when needed. The example is <code>30 07 02 01 01 02 02 00 80</code>. The raw pair carries no sighash type. You need the Bitcoin signing context and the digest rule the sender used.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="bitcoin">
+          <h3><span class="chapter-number">27</span> Bitcoin signing, from a UTXO to a witness</h3>
+          <p>An unspent transaction output (<strong>UTXO</strong>) records value and a locking script. A new input names a previous output by transaction ID and output index. The proposed spend supplies the data that the locking script requires. Alice’s example consumes a single 100,000-satoshi output, pays Bob 60,000, and returns 39,000 in change. The remaining 1,000 is the fee. Assume the previous output is native pay-to-witness-public-key-hash (<strong>P2WPKH</strong>), so the witness must supply a public key matching the committed hash and an ECDSA signature for this input.</p>
+          <ol class="flow" aria-label="Bitcoin P2WPKH signing flow">
+            <li><strong>Spend an outpoint</strong><span>Load the previous output’s value and witness program. Build the unsigned spend.</span></li>
+            <li><strong>Build the input digest</strong><span>Use BIP 143 with SIGHASH_ALL. Apply SHA-256 twice to its serialized preimage.</span></li>
+            <li><strong>Sign and encode</strong><span>Sign the digest with secp256k1. Encode Low-S r and s as DER and append 01.</span></li>
+            <li><strong>Supply the witness</strong><span>Push the signature item and serialized public key. Nodes rebuild the digest and check both.</span></li>
+          </ol>
+          <p>In this one-input, SIGHASH_ALL example, BIP 143’s preimage serializes transaction version, the hashes of all input outpoints and sequences, this input’s outpoint, its scriptCode, the previous output value, this input’s sequence, the hash of all outputs, locktime, and the sighash type as a four-byte little-endian integer. The scriptCode for P2WPKH is the length-prefixed P2PKH script for the witness program’s key hash. The amounts and scripts of Bob’s and Alice’s new outputs contribute to the output hash. The exact encoding and which pieces are committed depend on the script version and sighash flag. <a href="https://bips.dev/143/">BIP 143 preimage construction and test vectors</a>.</p>
+          <p>The returned stack item has the one-byte flag <code>01</code> after its DER sequence. Native P2WPKH leaves scriptSig empty. Its witness stack holds that signature item followed by the compressed public key in a standard spend. A node locates the previous UTXO, checks the public key’s hash against the witness program, rebuilds z from the input’s signing rules, and runs the signature check. The witness is omitted from txid and included in wtxid. Both identifiers hash transaction serializations, whereas the ECDSA digest uses the per-input signing construction. <a href="https://bips.dev/141/">BIP 141 witness and identifiers</a>.</p>
+          <p>Legacy P2PKH uses a different signing preimage and supplies its signature and key in scriptSig. P2WSH v0 may use an entire witness script, with stack arguments chosen by that script. Taproot is SegWit version 1. Taproot spends use the BIP 340 Schnorr signature scheme under their own rules, even though they use secp256k1 points. <a href="https://bips.dev/340/">BIP 340</a> · <a href="https://bips.dev/341/">BIP 341</a> · <a href="../pay-to-taproot/">Pay-to-Taproot Script Trees</a>.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why does the signature check need a previous output?</li><li><b>Calculation.</b> Calculate the fee and the amount the BIP 143 preimage includes for the spent output.</li><li><b>Application.</b> Can a wallet use the same digest constructor for legacy P2PKH and P2WPKH?</li></ol>
+            <details><summary>Hint</summary><p>The input names data stored outside the new transaction. Compare the script and witness rules.</p></details>
+            <details><summary>Answer</summary><p>The previous output supplies the conditions and value the input spends. The fee is 100,000 − 60,000 − 39,000 = 1,000 satoshis. The input value in the preimage is 100,000. The two script versions use different signing serializations, even when both verify with ECDSA.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="ethereum">
+          <h3><span class="chapter-number">28</span> Ethereum signing, from bytes to sender</h3>
+          <p>Consider a fictional type-2 transfer of 0.1 ETH with chain ID 1, account nonce 7, priority fee cap 1 gwei, total fee cap 30 gwei, gas limit 21,000, a 20-byte destination, empty data, and an empty access list. The account nonce is a transaction sequencing field. The cryptographic signing nonce k is the separate secret used inside ECDSA.</p>
+          <ol class="flow" aria-label="Ethereum type-2 signing flow">
+            <li><strong>Serialize unsigned fields</strong><span>Encode the nine fields in protocol order using RLP and prefix the type byte 02.</span></li>
+            <li><strong>Hash the preimage</strong><span>Run Keccak-256 on those bytes. Interpret the 256 bits as z.</span></li>
+            <li><strong>Sign and append fields</strong><span>Use secp256k1. Encode Low-S and the matching parity with r and s in the typed payload.</span></li>
+            <li><strong>Recover sender</strong><span>Recompute z, recover Q, and derive the sending account from its coordinates.</span></li>
+          </ol>
+          <p><strong>Step by step at a node.</strong> Decode type 0x02 and the RLP list. Check the chain ID, canonical format, parity bit, r and s ranges and the Low-S rule when validating the signed transaction. Rebuild the unsigned fields in this order: chain ID, account nonce, priority fee cap, total fee cap, gas limit, destination, value in wei, data, and access list. RLP (Recursive Length Prefix) encodes the bytes and lists with explicit lengths. Hash the type byte concatenated with this unsigned RLP list using Keccak-256. These are the exact bytes the signer had to cover. <a href="https://eips.ethereum.org/EIPS/eip-1559">EIP-1559 type-2 payload and signing preimage</a> · <a href="https://eips.ethereum.org/EIPS/eip-2">EIP-2 Low-S rule</a>.</p>
+          <p>Use r as the X coordinate and pick the matching Y with yParity. Rearrange the ECDSA point equation to recover a candidate public key and check that recovery succeeds. Hash its 64-byte X||Y with Keccak-256 and keep the last 20 bytes to identify the sender. Apply state checks such as account nonce and ability to pay. The signed transaction has its own hash over the signed bytes. Its signing hash excludes the signature fields.</p>
+          <p>Changing the chain ID changes the digest and the transaction’s target chain. Changing value or destination changes the digest too. Since the sender is recovered, a changed digest with a retained signature can yield a different candidate sender rather than a simple “bad signature under the original key” comparison. It no longer proves control of the intended sender for that altered transaction, and validity still depends on the claimed chain and account state. For an exact legacy byte vector with a known scalar and signature, compare the nonce-9, chain-1 transfer and v = 37 in Chapter 16. <a href="https://eips.ethereum.org/EIPS/eip-155">EIP-155 reference transaction</a>.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> How can a node find the sender when the public key is absent?</li><li><b>Calculation.</b> How many bytes enter the final Keccak computation when deriving the account address from the recovered key?</li><li><b>Application.</b> Can a relayer change chain ID and preserve authorization under the original sender?</li></ol>
+            <details><summary>Hint</summary><p>Recover using the signature and digest, then distinguish address input bytes from transaction hash input bytes.</p></details>
+            <details><summary>Answer</summary><p>Use r and parity to reconstruct the temporary point and use the digest in the recovery formula. The address derivation hashes 64 bytes and retains 20. Changing chain ID changes the signed bytes and the authorization check. The retained signature generally gives a different recovered key.</p></details>
+          </details>
+        </section>
+
+        <section class="chapter" id="hsm">
+          <h3><span class="chapter-number">29</span> Signing behind an HSM boundary</h3>
+          <p>Imagine a payments service that keeps its signing key in a Thales Luna or comparable hardware security module. The application keeps a public key and a handle referencing the private object. A key can be generated on the token and marked sensitive and non-extractable under the device’s policy. The service requests a signature without receiving d. Verification can run outside the HSM because it uses only public data.</p>
+          <ol class="flow" aria-label="Application to HSM signing flow">
+            <li><strong>Application prepares</strong><span>Build the protocol preimage and compute the exact digest. Authorize the signing request.</span></li>
+            <li><strong>HSM signs</strong><span>Use the private-key handle with CKM_ECDSA. The device manages the secret scalar and nonce.</span></li>
+            <li><strong>Application adapts</strong><span>Parse raw r || s, enforce range and protocol rules, derive recovery data if needed.</span></li>
+            <li><strong>Anyone verifies</strong><span>Use the public key, message digest, and signature. No private object is needed.</span></li>
+          </ol>
+          <p><strong>PKCS #11 contract.</strong> The CKM_ECDSA mechanism signs the digest supplied by the caller. Mechanisms named for a hash can hash an input message themselves. A signing result is two equally sized, unsigned, big-endian integers concatenated, full order byte width per component for generated signatures. For secp256k1 that is 64 bytes total. The signature contains no DER tags or recovery byte. Verify the returned representation and check both scalar ranges before adapting it. <a href="https://docs.oasis-open.org/pkcs11/pkcs11-curr/v3.0/os/pkcs11-curr-v3.0-os.pdf">OASIS PKCS #11 Current Mechanisms, ECDSA</a>.</p>
+          <p><strong>Protocol adaptation.</strong> If the destination requires Low-S, compute the canonical s first. For an Ethereum transaction, use that final pair with the exact original digest, recover candidate public keys, and compare them with the trusted public key from provisioning. Use the matching parity on the representable X branch. If deriving parity from the raw pair first, flip the bit only when s was changed. For Bitcoin ECDSA, use DER plus the correct sighash byte. An integration test should verify the final serialization through the same path the receiving protocol uses.</p>
+          <p><strong>Vendor behavior.</strong> A supported PKCS #11 mechanism does not imply support for every curve in every mode. Luna publishes mechanism tables with firmware- and partition-dependent restrictions, including approved-curve requirements in applicable configurations. Verify curve and mechanism support for the actual firmware and partition. The generic mechanism does not promise RFC 6979 or a particular nonce source. Verify those properties in documentation or with the vendor before relying on them. Protect the application’s access to signing too. A non-extractable key can still be used inappropriately by a service that signs unauthorized requests. <a href="https://thalesdocs.com/gphsm/luna/7/docs/network/Content/sdk/mechanisms/CKM_ECDSA.htm">Thales Luna CKM_ECDSA mechanism notes</a>.</p>
+          <details class="practice"><summary>Knowledge check</summary>
+            <ol><li><b>Intuition.</b> Why can verification run outside the hardware boundary?</li><li><b>Calculation.</b> Which offsets hold r and s in a 64-byte result? Use zero-based offsets.</li><li><b>Application.</b> A raw signature verifies against your known key but a typed Ethereum transaction recovers a different sender. What would you compare?</li></ol>
+            <details><summary>Hint</summary><p>Check the signing hash and the final pair. Normalizing S may change recovery Y.</p></details>
+            <details><summary>Answer</summary><p>Verification needs no private object. r occupies offsets 0–31 and s occupies 32–63. Recompute the exact typed signing digest, check scalar encoding and final s, and recover each parity against the trusted point. Confirm the matching X branch is representable and the selected parity matches the final pair.</p></details>
+          </details>
+        </section>
+      </section>
+
+      <section class="part" id="capstone" aria-labelledby="capstone-title">
+        <p class="part-number">Put it together</p>
+        <h2 id="capstone-title">Capstone</h2>
+        <p class="part-lead">Work on paper first, then replay each step in the labs. Use a new toy key d = 5, digest z = 3, and nonce k = 6. For the second signature use z₂ = 4.</p>
+        <ol>
+          <li>Generate the public point using doubling and addition. Confirm the result with the point table.</li>
+          <li>Compute R, r, the nonce inverse, and s. Mark every scalar step that uses n = 19.</li>
+          <li>Verify with only the signature, digest, public point, and parameters. Derive u₁G and u₂Q, add them, then check X.</li>
+          <li>Normalize the signature. Determine which temporary point and parity now correspond to it.</li>
+          <li>Recover the signer from the normalized signature and the correct parity. Show how you choose between the Y roots.</li>
+          <li>Explain why the public transcript does not hand a verifier d or k on secp256k1. Explain why the toy curve is different.</li>
+          <li>Sign z₂ with the same k and recover k and d from the two original signatures. Test the distinct Low-S representations as a follow-up.</li>
+        </ol>
+        <div class="challenge">
+          <details><summary>Hints</summary><p>5G = 4G + G and 6G = 4G + 2G. The inverses of 6 and 16 modulo 19 happen to be each other. For verification use the point table rather than the secret d. To derive d after nonce reuse, choose one consistent sign for each observed s and match the resulting public point.</p></details>
+          <details><summary>Worked solution</summary>
+            <ol>
+              <li><strong>Key.</strong> 4G = (3, 1) plus G = (5, 1) has slope 0 over the field. x ≡ −3−5 ≡ 9 and y ≡ −1 ≡ 16. So Q = (9, 16).</li>
+              <li><strong>Sign.</strong> 6G = (16, 13) from 4G + 2G. r = 16. Because 6·16 = 96 ≡ 1 modulo 19, k⁻¹ = 16. Then s ≡ 16(3 + 16·5) ≡ 16·83 ≡ 17. The original parity is 1.</li>
+              <li><strong>Verify.</strong> 17·9 = 153 ≡ 1 modulo 19. Thus w = 9, u₁ = 27 mod 19 = 8 and u₂ = 144 mod 19 = 11. 8G = (13, 7). Using double-and-add on Q gives 2Q = (7, 11), 4Q = G, and 8Q = (6, 3). Add 8Q + 2Q using slope (11 − 3)·1⁻¹ ≡ 8 to get (0, 11), then add Q using λ = 5·9⁻¹ ≡ 5·2 ≡ 10 to get 11Q = (6, 14). Add (13, 7) and (6, 14). The slope is 7·(−7)⁻¹ ≡ −1 modulo 17. This gives x ≡ 1−13−6 ≡ 16 and y ≡ −1(13−16)−7 ≡ 13. The X comparison passes.</li>
+              <li><strong>Normalize.</strong> s becomes 19 − 17 = 2. The effective R is −(16, 13) = (16, 4). The selector becomes 0. r stays 16.</li>
+              <li><strong>Recover.</strong> At x = 16, the cubic is 4130 ≡ 16 modulo 17 and the square roots are 4 and 13. Even selects 4. The point is 13G by the table. Then sR − zG = (2·13−3)G = 23G = 4G. Since r⁻¹ = 6, we get 24G = 5G = (9, 16). The group arithmetic and scalar reductions suffice without knowing d.</li>
+              <li><strong>Secrecy.</strong> The signature point can be reconstructed using public weights. Turning it back into k or turning Q back into d takes a discrete logarithm. A 19-point lookup is trivial and secp256k1’s roughly 256-bit group order makes generic classical search infeasible.</li>
+              <li><strong>Reuse.</strong> z₂ = 4 gives s₂ ≡ 16(4 + 80) ≡ 14. Subtract: (17−14)k ≡ 3−4 ≡ −1. The inverse of 3 is 13, so k ≡ −13 ≡ 6. Then d ≡ 6(17·6−3) = 594 ≡ 5. Low-S would expose s values 2 and 5. Using both with positive signs gives k ≡ −6 and still d = 5. Reversing both signs recovers the original nonce representative.</li>
+            </ol>
+          </details>
+        </div>
+      </section>
+
+      <section class="part" id="reference" aria-labelledby="reference-title">
+        <p class="part-number">Reference</p>
+        <h2 id="reference-title">Symbols and formulas</h2>
+        <p class="part-lead">The examples below use the original toy signature throughout. Look up a symbol, operation, or practical term.</p>
+        <div class="controls"><label for="glossary-search">Search glossary<input id="glossary-search" type="search" placeholder="Try nonce, parity, or mod n"></label></div>
+        <p id="glossary-count" aria-live="polite"></p>
+        <dl class="glossary" id="glossary">
+          <div><dt>p · Field modulus</dt><dd>Public prime 17. Coordinates, slopes, point negation and square roots use mod p.</dd></div>
+          <div><dt>a, b · Curve coefficients</dt><dd>Public parameters 2 and 2 for the toy cubic, 0 and 7 for secp256k1.</dd></div>
+          <div><dt>n · Generator order</dt><dd>Public prime 19. Generator counts, signature scalars and their inverses use mod n.</dd></div>
+          <div><dt>G · Generator</dt><dd>Public point (5, 1). A scalar selects repeated additions of this point.</dd></div>
+          <div><dt>𝒪 · Point at infinity</dt><dd>The group’s identity, with no affine coordinates. 19G reaches it.</dd></div>
+          <div><dt>λ · Slope</dt><dd>Public when the input points are public. Computed in the field. Doubling G gives λ = 13.</dd></div>
+          <div><dt>d · Private key</dt><dd>Secret scalar 7 for teaching. In practice selected in 1…n−1.</dd></div>
+          <div><dt>Q · Public key</dt><dd>Public point dG = (0, 6). Its inverse is (0, 11).</dd></div>
+          <div><dt>z · Digest integer</dt><dd>Public for verification. 8 here, after the application’s hash-to-integer step in real systems.</dd></div>
+          <div><dt>k · Nonce</dt><dd>Secret scalar 4 here. A per-signature count used to produce R.</dd></div>
+          <div><dt>R · Nonce point</dt><dd>Temporary point kG = (3, 1). Reconstructible under an appropriate key or recovery selector.</dd></div>
+          <div><dt>r · Signature X residue</dt><dd>Public scalar 3, from reducing R.x modulo n.</dd></div>
+          <div><dt>s · Signature multiplier</dt><dd>Public scalar 12. Scales R to the digest-and-key point combination.</dd></div>
+          <div><dt>w · Inverse of s</dt><dd>Public scalar 8 modulo n. Removes the signature multiplier.</dd></div>
+          <div><dt>u₁ · Generator weight</dt><dd>Public scalar 7, computed as zw mod n.</dd></div>
+          <div><dt>u₂ · Public-key weight</dt><dd>Public scalar 5, computed as rw mod n.</dd></div>
+          <div><dt>R′ · Verification point</dt><dd>Public candidate u₁G + u₂Q = (3, 1). Its X is tested against r.</dd></div>
+          <div><dt>yParity · Recovery selector</dt><dd>Public bit 1 for the odd R here. It is 0 after normalization to s = 7.</dd></div>
+          <div><dt>Recovery ID</dt><dd>Generic encoding of X branch and Y parity. In the convention discussed here, the toy original has ID 1.</dd></div>
+          <div><dt>Low-S</dt><dd>Canonical representative with s at most floor(n/2). The toy bound is 9 and the normalized s is 7.</dd></div>
+          <div><dt>Discrete logarithm</dt><dd>Find a scalar from a public base and resulting group element. The toy table reveals d and k immediately.</dd></div>
+          <div><dt>DER</dt><dd>ASN.1 byte representation using a sequence of two minimally encoded signed integers for r and s.</dd></div>
+          <div><dt>UTXO · Unspent output</dt><dd>A Bitcoin output tracked by outpoint until spent. Its locking condition controls the spend.</dd></div>
+          <div><dt>HSM · Hardware security module</dt><dd>Performs key operations behind a restricted device boundary.</dd></div>
+        </dl>
+        <div class="table-scroll">
+          <table><caption>Formula reference. Point operations use the field and scalar reductions use the generator order.</caption><thead><tr><th scope="col">Step</th><th scope="col">Formula</th><th scope="col">Running example</th></tr></thead><tbody>
+            <tr><td>Point membership</td><td><code>y² ≡ x³ + ax + b (mod p)</code></td><td>For G, 1 ≡ 137 modulo 17.</td></tr>
+            <tr><td>Point inverse</td><td><code>−(x,y) = (x,−y mod p)</code></td><td>−R = (3, 16).</td></tr>
+            <tr><td>Chord / tangent slope</td><td><code>λ ≡ (y₂−y₁)(x₂−x₁)⁻¹</code> or <code>(3x₁²+a)(2y₁)⁻¹</code> mod p</td><td>Doubling G gives 77·9 ≡ 13.</td></tr>
+            <tr><td>Addition coordinates</td><td><code>x₃ ≡ λ²−x₁−x₂</code>, <code>y₃ ≡ λ(x₁−x₃)−y₁</code> mod p</td><td>For G + G, (6, 3).</td></tr>
+            <tr><td>Generate points</td><td><code>Q = dG</code>, <code>R = kG</code></td><td>7G = (0, 6) and 4G = (3, 1).</td></tr>
+            <tr><td>Sign</td><td><code>r = R.x mod n</code>, <code>s = k⁻¹(z + rd) mod n</code></td><td>r = 3, s = 5·29 mod 19 = 12.</td></tr>
+            <tr><td>Signature relation</td><td><code>sR = zG + rQ</code></td><td>48G = 29G = 10G.</td></tr>
+            <tr><td>Verify</td><td><code>w = s⁻¹</code>, <code>u₁ = zw</code>, <code>u₂ = rw</code> mod n. Form <code>R′ = u₁G + u₂Q</code>.</td><td>(8, 7, 5) are the weights and inverse in w, u₁, u₂ order. R′.x mod 19 equals r.</td></tr>
+            <tr><td>Recover</td><td><code>Q = r⁻¹(sR − zG)</code> after selecting R.</td><td>13(10G − 8G) = 7G.</td></tr>
+            <tr><td>Normalize</td><td><code>s′ = n − s</code> when s is high. Use −R for recovery.</td><td>(3, 12) with parity 1 becomes (3, 7) with parity 0.</td></tr>
+            <tr><td>Diagnose toy nonce reuse</td><td><code>k ≡ (z₁−z₂)(s₁−s₂)⁻¹</code>, then <code>d ≡ r⁻¹(sk−z)</code> mod n.</td><td>With z₂ = 9, recover k = 4, d = 7.</td></tr>
+          </tbody></table>
+        </div>
+
+        <h3>Common sticking points</h3>
+        <details><summary>Why does one equation use 17 and the next use 19?</summary><p>Seventeen says how coordinates wrap and which denominators can be inverted to evaluate the point law. Nineteen says how many additions of G make a full circuit. For example, in <code>Q = dG</code> you can reduce d modulo 19 first, then every chord or tangent uses modulo 17. <a href="#generators">Revisit the two moduli</a>.</p></details>
+        <details><summary>How can drawing a line count as addition?</summary><p>Addition names an operation with a neutral value, inverses, and associative regrouping. The line supplies a third curve point and reflection gives that point’s inverse. Adding coordinates in the ambient plane can leave the curve. <a href="#point-law">Revisit the geometric construction</a>.</p></details>
+        <details><summary>Does the signature reveal R, k, or d?</summary><p>r publishes an X residue of R. With z and a trusted Q, verification computes the corresponding R. The scalar k is the step count required to reach R, which is a discrete logarithm. The same hard inverse separates Q from d. The scalar signing equation cannot isolate d using the public pair alone because k is still unknown. <a href="#key-secrecy">Revisit key secrecy</a>.</p></details>
+        <details><summary>Does ECDSA multiply the message hash by the private key?</summary><p>The private scalar d is multiplied by r, the temporary point’s X residue. The digest integer z is added to that product. Multiplication by the inverse of k turns the whole sum into s, the multiplier that makes the verification relation hold. <a href="#signature">Revisit the derivation</a>.</p></details>
+        <details><summary>Does Low-S make a signature unique or recover the correct key by itself?</summary><p>Low-S chooses a representative between s and n−s for a given signature. Different nonces may still yield different signatures. Recovery still needs a digest and a valid choice of nonce point. Its Y bit can differ from the public key’s compression bit, and flips when s changes sign. <a href="#s-proof">Revisit the sign change</a>.</p></details>
+        <details><summary>Why is reusing an unrevealed nonce different from signing deterministically?</summary><p>Reusing a nonce across different effective digests supplies two equations with the same unknowns, so subtraction cancels the private-key term. A deterministic generator includes the signing input in its derivation. For the same effective input and signing procedure, repeating one equation adds no new information. <a href="#deterministic">Revisit deterministic signing</a>.</p></details>
+
+        <h3>Further reading</h3>
+        <ul class="sources">
+          <li>Point encodings, signature generation, verification, and recovery. <a href="https://www.secg.org/sec1-v2.pdf">SEC 1</a>.</li>
+          <li>secp256k1 parameters. <a href="https://www.secg.org/sec2-v2.pdf">SEC 2 §2.4.1</a>.</li>
+          <li>Independent description of ECDSA digest conversion and validity conditions, with its own approved curve requirements. <a href="https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.186-5.pdf">FIPS 186-5 §6.4</a>.</li>
+          <li>Deterministic nonce generation and test vectors. <a href="https://www.rfc-editor.org/rfc/rfc6979.html">RFC 6979</a>.</li>
+          <li>Implementation entry points for parsing, normalization, verification, and recovery. <a href="https://github.com/bitcoin-core/secp256k1/blob/master/include/secp256k1.h">libsecp256k1 API</a> · <a href="https://github.com/bitcoin-core/secp256k1/blob/master/include/secp256k1_recovery.h">Recovery module API</a>.</li>
+          <li>ECDSA encoding, SegWit identifiers and sighash, and Taproot’s separate signature scheme. <a href="https://bips.dev/66/">BIP 66</a> · <a href="https://bips.dev/141/">BIP 141</a> · <a href="https://bips.dev/143/">BIP 143</a> · <a href="https://bips.dev/341/">BIP 341</a>.</li>
+          <li>Ethereum’s Low-S rule, chain protection and type-2 signed fields. <a href="https://eips.ethereum.org/EIPS/eip-2">EIP-2</a> · <a href="https://eips.ethereum.org/EIPS/eip-155">EIP-155</a> · <a href="https://eips.ethereum.org/EIPS/eip-1559">EIP-1559</a>.</li>
+          <li>Token ECDSA mechanisms and a vendor example of firmware restrictions. <a href="https://docs.oasis-open.org/pkcs11/pkcs11-curr/v3.0/os/pkcs11-curr-v3.0-os.pdf">OASIS PKCS #11 Current Mechanisms</a> · <a href="https://thalesdocs.com/gphsm/luna/7/docs/network/Content/sdk/mechanisms/CKM_ECDSA.htm">Luna mechanism notes</a>.</li>
+        </ul>
+      </section>
+    </div>
+  </main>
+  <footer><div class="shell"><a href="../">Interactive Learning directory</a> · <a href="#top">Back to top</a></div></footer>
+</body>
+</html>
