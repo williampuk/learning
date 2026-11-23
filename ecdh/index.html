@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#110f19">
+  <meta name="description" content="Follow Alice and Bob through elliptic-curve Diffie–Hellman on a 19-point toy curve, then see how TLS uses the same idea.">
+  <title>ECDH — A Visual Guide to Key Agreement</title>
+  <link rel="stylesheet" href="./lesson.css">
+  <script type="module" src="./lesson.mjs"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to the guide</a>
+  <header class="site-header">
+    <div class="shell topbar">
+      <a class="brand" href="../">Interactive Learning</a>
+      <a class="header-link" href="../ecdsa/">ECDSA guide</a>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <div class="hero-frame">
+      <div class="shell hero">
+        <div>
+          <p class="eyebrow">Elliptic-curve Diffie–Hellman</p>
+          <h1>ECDH</h1>
+          <p class="hero-lead">How can Alice and Bob agree on a secret over a public channel? Follow the two public points they exchange and the calculation each side does in private.</p>
+          <a class="button" href="#exchange">Try the exchange</a>
+        </div>
+        <figure class="hero-figure">
+          <div class="diagram">
+            <div class="diagram-person alice"><strong>Alice</strong><span>Keeps <var>a</var></span></div>
+            <div class="diagram-person bob"><strong>Bob</strong><span>Keeps <var>b</var></span></div>
+            <div class="diagram-wire">
+              <div><span>Alice sends <code>A = aG</code></span><span class="arrow" aria-hidden="true">→</span></div>
+              <div><span class="arrow" aria-hidden="true">←</span><span>Bob sends <code>B = bG</code></span></div>
+            </div>
+            <div class="diagram-result alice"><span>Alice computes</span><code>aB</code></div>
+            <div class="diagram-result bob"><span>Bob computes</span><code>bA</code></div>
+          </div>
+          <figcaption>Same shared point <code>aB = bA = (ab)G</code></figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <nav class="shell outline" aria-label="Guide sections">
+      <a href="#starting-point">What you need</a>
+      <a href="#exchange">Exchange lab</a>
+      <a href="#why-it-works">Why it works</a>
+      <a href="#security">What keeps it secret</a>
+      <a href="#practice">In real protocols</a>
+    </nav>
+
+    <div class="shell lesson">
+      <section class="chapter" id="starting-point" aria-labelledby="starting-title">
+        <h2 id="starting-title">Start with a familiar public key</h2>
+        <p>If you know how an elliptic-curve public key is made, you have the prerequisite. A private key is a number <var>d</var>. A public key is a point <code>Q = dG</code>, where <var>G</var> is the public generator and <code>dG</code> means adding together <var>d</var> copies of <var>G</var>. For a refresher, see <a href="../ecdsa/#generators">point addition and scalar multiplication in the ECDSA guide</a>.</p>
+        <p>ECDSA uses that key relationship to sign and verify messages. ECDH uses it to establish shared key material. Each party starts by creating a key pair, then applies the same multiplication operation again using the <em>other party’s public point</em> as the starting point.</p>
+        <div class="curve-spec" role="group" aria-label="Toy curve parameters">
+          <div><span>Curve equation</span><code>y² ≡ x³ + 2x + 2 (mod 17)</code></div>
+          <div><span>Generator</span><code>G = (5, 1)</code></div>
+          <div><span>Generator order</span><code>n = 19</code></div>
+        </div>
+        <p>We’ll use the same toy curve as the ECDSA guide. Its 18 affine points and the identity <code>𝒪</code> are small enough to work with by hand. Signing and verification formulas are optional background.</p>
+      </section>
+
+      <section class="chapter lab-chapter" id="exchange" aria-labelledby="exchange-title">
+        <h2 id="exchange-title">Run the exchange</h2>
+        <p>Choose Alice’s and Bob’s private scalars, then follow the exchange from key creation to the shared point. Try changing either scalar on the last step and watch both calculations update.</p>
+        <noscript><p class="callout">Enable JavaScript to use the lab. The worked exchange below includes all calculations.</p></noscript>
+        <div class="lab" id="lab" hidden>
+          <fieldset class="steps">
+            <legend>Exchange step</legend>
+            <div class="step-options">
+              <label><input type="radio" name="step" value="1" checked><span>1. Make keys</span></label>
+              <label><input type="radio" name="step" value="2"><span>2. Exchange points</span></label>
+              <label><input type="radio" name="step" value="3"><span>3. Derive the secret</span></label>
+            </div>
+          </fieldset>
+          <div class="lab-layout">
+            <div class="lab-exchange">
+              <div class="participants">
+                <section class="person alice" aria-labelledby="alice-title">
+                  <h3 id="alice-title">Alice</h3>
+                  <label class="scalar" for="alice-scalar"><span>Private scalar <var>a</var></span><span id="alice-value" class="scalar-value" aria-hidden="true">7</span></label>
+                  <input type="range" id="alice-scalar" min="1" max="18" value="7">
+                  <p>Public point <code id="alice-public"></code></p>
+                  <p id="alice-calculation" class="local-result" hidden>Local result <code id="alice-shared"></code></p>
+                </section>
+                <section class="person bob" aria-labelledby="bob-title">
+                  <h3 id="bob-title">Bob</h3>
+                  <label class="scalar" for="bob-scalar"><span>Private scalar <var>b</var></span><span id="bob-value" class="scalar-value" aria-hidden="true">5</span></label>
+                  <input type="range" id="bob-scalar" min="1" max="18" value="5">
+                  <p>Public point <code id="bob-public"></code></p>
+                  <p id="bob-calculation" class="local-result" hidden>Local result <code id="bob-shared"></code></p>
+                </section>
+              </div>
+              <div class="channel">
+                <h3>Public channel</h3>
+                <p id="channel-pending">The public points are ready to send.</p>
+                <ul id="channel-points" hidden>
+                  <li>Alice sends Bob <code id="wire-alice"></code></li>
+                  <li>Bob sends Alice <code id="wire-bob"></code></li>
+                </ul>
+              </div>
+              <p class="lab-status" id="lab-status" role="status" aria-atomic="true"></p>
+              <div class="lab-actions">
+                <button type="button" id="next-step">Exchange public points</button>
+                <button type="button" class="secondary" id="reset">Reset example</button>
+              </div>
+            </div>
+            <figure class="curve-figure">
+              <canvas width="540" height="540" id="curve" aria-hidden="true"></canvas>
+              <figcaption>
+                <span class="plot-title">Points on the toy curve</span>
+                <ul class="legend">
+                  <li><span class="dot generator" aria-hidden="true"></span><code>G (5, 1)</code></li>
+                  <li><span class="dot alice" aria-hidden="true"></span><code id="alice-coordinate"></code></li>
+                  <li><span class="dot bob" aria-hidden="true"></span><code id="bob-coordinate"></code></li>
+                  <li id="shared-legend" hidden><span class="dot shared" aria-hidden="true"></span><code id="shared-coordinate"></code></li>
+                </ul>
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <section class="chapter" id="why-it-works" aria-labelledby="math-title">
+        <h2 id="math-title">Why both sides reach the same point</h2>
+        <p>Imagine Bob has already counted out <var>b</var> copies of <var>G</var> and bundled them into one point <var>B</var>. Alice adds <var>a</var> copies of that bundle, for <var>a</var> groups of <var>b</var>. Bob makes <var>b</var> groups of <var>a</var> using Alice’s point <var>A</var>. Both have counted the same number of copies of <var>G</var>.</p>
+        <div class="proof" role="group" aria-label="The two calculations">
+          <div class="alice"><span>Alice’s calculation</span><code>aB = a(bG) = (ab)G</code></div>
+          <div class="bob"><span>Bob’s calculation</span><code>bA = b(aG) = (ba)G</code></div>
+        </div>
+        <p>Point addition lets you regroup the copies of <var>G</var>. The equality <code>ab = ba</code> is ordinary integer multiplication. Each person has only one private scalar, and the received point already embodies the other scalar’s contribution.</p>
+
+        <h3>Work it by hand</h3>
+        <p>Alice chooses <code>a = 7</code> and publishes <code>A = 7G = (0, 6)</code>. Bob chooses <code>b = 5</code> and publishes <code>B = 5G = (9, 16)</code>. With those points in hand, Alice adds seven copies of <var>B</var> and Bob adds five copies of <var>A</var>.</p>
+        <div class="proof" role="group" aria-label="The worked exchange results">
+          <div class="alice"><span>Alice uses Bob’s point</span><code>7(9, 16) = (10, 11)</code></div>
+          <div class="bob"><span>Bob uses Alice’s point</span><code>5(0, 6) = (10, 11)</code></div>
+        </div>
+        <details>
+          <summary>See the point additions</summary>
+          <ol>
+            <li>Alice doubles <var>B</var> to get <code>2B = (7, 11)</code>, then doubles again to get <code>4B = (5, 1)</code>. She adds <code>4B + 2B = (13, 10)</code>, then adds <var>B</var> to get <code>7B = (10, 11)</code>.</li>
+            <li>Bob doubles <var>A</var> to get <code>2A = (9, 1)</code>, then doubles again to get <code>4A = (7, 6)</code>. He adds <var>A</var> to get <code>5A = (10, 11)</code>.</li>
+          </ol>
+          <p>The <a href="../ecdsa/#running-example">toy curve table and addition workshop</a> let you reproduce the arithmetic.</p>
+        </details>
+
+        <h3>Where each modulus belongs</h3>
+        <dl class="moduli">
+          <div><dt>Coordinates use <code>mod p</code></dt><dd>The point-addition formulas work in the field of size <code>p = 17</code>. For example, doubling <code>B = (9, 16)</code> uses slope <code>(3·9² + 2)/(2·16) ≡ 5 (mod 17)</code>. Division here means multiplying by the denominator’s inverse in that field.</dd></div>
+          <div><dt>Counts of <var>G</var> wrap <code>mod n</code></dt><dd>Since <code>19G = 𝒪</code>, every extra 19 copies of <var>G</var> bring you back to the same point. The shared point is <code>35G = (35 mod 19)G = 16G</code>. This is a check you can make because the example gives you both private scalars.</dd></div>
+        </dl>
+        <details class="check-yourself">
+          <summary>Try a prediction</summary>
+          <p>Set Alice’s scalar to 1 and keep Bob’s at 5. Where will the shared point land?</p>
+          <details><summary>Reveal the answer</summary><p>Alice computes <code>1B = B</code> and Bob computes <code>5G = B</code>. The shared point coincides with Bob’s public point at <code>(9, 16)</code>. That is one reason a real private scalar must be unpredictable.</p></details>
+        </details>
+      </section>
+
+      <section class="chapter" id="security" aria-labelledby="security-title">
+        <h2 id="security-title">What keeps the shared point secret?</h2>
+        <p>A passive observer has <var>G</var>, <var>A</var>, and <var>B</var>. The task of finding <code>(ab)G</code> from those three points is the <strong>computational Diffie–Hellman problem</strong>. One possible route is to recover <var>a</var> from <code>A = aG</code>, which is the <strong>elliptic-curve discrete logarithm problem</strong>, and then compute <code>aB</code>. ECDH assumes computing the shared point from public information is infeasible for the chosen group and properly generated keys.</p>
+        <p>On our toy curve, an observer could try all 18 private scalars and find the one whose public point matches Alice’s. Real curves have vastly larger groups, and real implementations generate private keys with a cryptographically secure random source.</p>
+        <div class="callout">
+          <h3>What if someone changes a public point?</h3>
+          <p>A valid point can belong to anyone. If someone can substitute public keys in transit, Alice and Bob can each establish a different secret with that intermediary. In a certificate-authenticated TLS handshake, the server signs the handshake transcript (which includes the exchanged key shares). The client verifies the signature and certificate to bind the exchange to the expected server.</p>
+        </div>
+      </section>
+
+      <section class="chapter" id="practice" aria-labelledby="practice-title">
+        <h2 id="practice-title">From shared point to session keys</h2>
+        <ol class="protocol">
+          <li><strong>Check the peer’s key share.</strong> For the short Weierstrass curves used by TLS, the peer point must have in-range coordinates, lie on the chosen curve, and differ from the identity. Validation rules depend on the group and protocol.</li>
+          <li><strong>Compute and encode the shared value.</strong> For such curves, TLS encodes the shared point’s <var>x</var>-coordinate as fixed-width bytes. With X25519, public shares and the shared output are encoded Montgomery <var>u</var>-coordinates. TLS aborts if the X25519 shared output is all zero.</li>
+          <li><strong>Derive the keys needed by the protocol.</strong> TLS 1.3 feeds the shared value into its HKDF key schedule. The schedule also uses handshake transcript hashes and labels to derive separate traffic secrets and keys for each direction.</li>
+        </ol>
+        <p>For the toy point <code>(10, 11)</code>, the field element <code>x = 10</code> would fit in one byte, <code>0a</code> in hexadecimal. Encoding preserves the coordinate’s value. It stays within the field of size <var>p</var> and is fed into key derivation as bytes.</p>
+        <p>In <strong>ECDHE</strong>, the last letter stands for <em>ephemeral</em>. Each peer generates a fresh key pair for the exchange and discards the private material when it’s no longer needed. With authenticated ephemeral exchange and proper erasure of session secrets, later compromise of a long-term signing key leaves past sessions protected. This is <strong>forward secrecy</strong>.</p>
+        <h3>Further reading</h3>
+        <ul class="sources">
+          <li><a href="https://csrc.nist.gov/pubs/sp/800/56/a/r3/final">NIST SP 800-56A Rev. 3, key agreement and public-key validation</a></li>
+          <li><a href="https://www.rfc-editor.org/rfc/rfc7748#section-6.1">RFC 7748 §6.1, the X25519 exchange and a test vector</a></li>
+          <li><a href="https://www.rfc-editor.org/rfc/rfc9846.html">RFC 9846, TLS 1.3 authentication, key schedule, and ECDH</a></li>
+        </ul>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="shell"><a href="../">Back to Interactive Learning</a></div>
+  </footer>
+</body>
+</html>
