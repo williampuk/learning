@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Glossary and worked reference · Bitcoin Taproot</title>
+  <link rel="stylesheet" href="./lesson.css">
+  <link rel="stylesheet" href="./book.css">
+
+</head>
+<body class="book">
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="bookbar"><div class="book-shell">
+    <a class="wordmark" href="./"><span aria-hidden="true">₿</span> Taproot field guide</a>
+    <nav aria-label="Site"><a href="./#contents">Contents</a><a href="./reference.html">Reference</a><a href="../">Learning index</a>
+</nav>
+  </div>
+</header>
+  <main id="main" class="book-shell chapter-layout">
+  <aside class="course-nav">
+<details>
+<summary>Chapters</summary>
+<nav aria-label="Chapters"><a  href="./why.html"><span>01</span>Why Taproot exists</a><a  href="./schnorr.html"><span>02</span>Schnorr and x-only keys</a><a  href="./keys.html"><span>03</span>From an internal key to an address</a><a  href="./signing.html"><span>04</span>Key-path spends and signature hashing</a><a  href="./trees.html"><span>05</span>Script trees and control blocks</a><a  href="./tapscript.html"><span>06</span>Executing Tapscript</a><a  href="./cooperation.html"><span>07</span>Cooperative signing with MuSig2</a><a  href="./wallets.html"><span>08</span>BIP86 and wallet recovery</a><a  href="./transactions.html"><span>09</span>Reading confirmed transactions</a><a  href="./implementation.html"><span>10</span>Go, PSBT, and hardware signing</a><a  href="./vault.html"><span>11</span>Capstone: Build and spend the vault</a><a aria-current=page href="./reference.html"><span>12</span>Glossary and worked reference</a>
+</nav>
+</details>
+<nav class="wide-nav" aria-label="Chapters"><a  href="./why.html"><span>01</span>Why Taproot exists</a><a  href="./schnorr.html"><span>02</span>Schnorr and x-only keys</a><a  href="./keys.html"><span>03</span>From an internal key to an address</a><a  href="./signing.html"><span>04</span>Key-path spends and signature hashing</a><a  href="./trees.html"><span>05</span>Script trees and control blocks</a><a  href="./tapscript.html"><span>06</span>Executing Tapscript</a><a  href="./cooperation.html"><span>07</span>Cooperative signing with MuSig2</a><a  href="./wallets.html"><span>08</span>BIP86 and wallet recovery</a><a  href="./transactions.html"><span>09</span>Reading confirmed transactions</a><a  href="./implementation.html"><span>10</span>Go, PSBT, and hardware signing</a><a  href="./vault.html"><span>11</span>Capstone: Build and spend the vault</a><a aria-current=page href="./reference.html"><span>12</span>Glossary and worked reference</a>
+</nav>
+</aside>
+  <article class="chapter">
+  <header class="chapter-head">
+<p class="overline">Reference</p>
+<h1>Glossary and worked reference</h1>
+  <p class="lede">Look up symbols, transaction fields, common misconceptions, and primary sources.</p>
+</header>
+  <nav class="local-nav" aria-label="On this page"><a href="#symbols">Mathematics and serialization glossary</a><a href="#wire">Transaction and witness reference</a><a href="#recap">From a spending rule to the node’s decision</a><a href="#mistakes">Common misconceptions</a><a href="#sources">Primary sources and reproducible fixtures</a>
+</nav>
+  <h2 id="symbols">Mathematics and serialization glossary</h2><div class="table-scroll" tabindex="0" role="region" aria-label="Symbol comparison table">
+<table>
+<thead>
+<tr><th scope="col">Symbol</th><th scope="col">Type and source</th><th scope="col">Use</th>
+</tr>
+</thead>
+<tbody>
+<tr><th scope=row>G</th><td>Fixed public secp256k1 generator point.</td><td>Multiply scalars to obtain curve points.</td>
+</tr>
+<tr><th scope=row>n</th><td>Fixed group order.</td><td>Reduce signing scalars. Exact hex: <code>fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141</code></td>
+</tr>
+<tr><th scope=row>p</th><td>Prime field modulus.</td><td>Reduce coordinates. Exact hex: <code>fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f</code></td>
+</tr>
+<tr><th scope=row>d₀, d</th><td>Private raw and even-Y internal secret scalars.</td><td>dG corresponds to even P when the secret is known.</td>
+</tr>
+<tr><th scope=row>P / x(P)</th><td>Full even internal curve point / 32-byte big-endian encoding.</td><td>Build TapTweak and reconstruct script proofs.</td>
+</tr>
+<tr><th scope=row>m</th><td>Optional 32-byte Merkle root.</td><td>Public once reconstructed or disclosed. Empty data when the tree is omitted. BIP32 uses m separately as a path prefix.</td>
+</tr>
+<tr><th scope=row>t</th><td>Publicly computable scalar from TapTweak.</td><td>Require t&lt;n. Use tG as point offset.</td>
+</tr>
+<tr><th scope=row>Q / x(Q)</th><td>Full tweaked output point / 32 bytes.</td><td>Script program uses x(Q). Control block checks full Q’s parity.</td>
+</tr>
+<tr><th scope=row>u, q</th><td>Private pre-normalization and final even-Y output scalars, if available.</td><td>Key-path signer signs for qG = lift_x(x(Q)).</td>
+</tr>
+<tr><th scope=row>M</th><td>Message bytes.</td><td>For Taproot, the 32-byte TapSighash digest.</td>
+</tr>
+<tr><th scope=row>k, R</th><td>Private nonce scalar and corresponding public even-Y point.</td><td>R = kG.</td>
+</tr>
+<tr><th scope=row>e</th><td>Public challenge scalar.</td><td>Hash r, x-only signing key and M, then reduce modulo n.</td>
+</tr>
+<tr><th scope=row>r, s</th><td>Public signature integers.</td><td>r = x(R) is below p, and response s is below n. Both are 32-byte big-endian words.</td>
+</tr>
+<tr><th scope=row>S, L</th><td>Serialized leaf script and its TapLeaf hash.</td><td>The script runs only after membership succeeds.</td>
+</tr>
+<tr><th scope=row>d (control block size only)</th><td>Public proof depth in number of sibling hashes.</td><td>33+32d gives the number of control-block bytes.</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="wire">Transaction and witness reference</h2>
+<pre class="equation"><code>Stripped TX: version[4] | #vin | vin… | #vout | vout… | locktime[4]
+SegWit TX:   version[4] | 00 01 | #vin | vin… | #vout | vout… | witnesses… | locktime[4]
+TxIn:  reverse(txid)[32] | index[4] | varbytes(scriptSig) | nSequence[4]
+TxOut: satoshis[8] | varbytes(scriptPubKey)
+Witness per input: item_count | varbytes(item_0) | varbytes(item_1) | …
+Native P2TR scriptSig: 00 (length zero)
+Key path: one remaining item after annex removal
+Script path: arguments… | leaf script | control block, then any annex</code>
+</pre>
+<p>Fixed-width numbers here use little-endian wire order. TXIDs are conventionally displayed with reversed digest bytes. Counts, script lengths, and witness item lengths use CompactSize: use one byte below 253, then prefixes fd/fe/ff plus 2/4/8 little-endian bytes as needed. Transaction weight is four times stripped size plus additional bytes from witness serialization, including marker and flag. Virtual size rounds weight/4 up.</p>
+<h2 id="recap">From a spending rule to the node’s decision</h2>
+<ol class="flow" aria-label="Process diagram">
+<li><strong>Choose authority</strong><span>An internal key for the normal case, plus optional recovery scripts.</span>
+</li>
+<li><strong>Commit</strong><span>TapLeaf and TapBranch give a root. TapTweak binds it to the key.</span>
+</li>
+<li><strong>Pay</strong><span>Encode x(Q) into a version-1 program and Bech32m address.</span>
+</li>
+<li><strong>Spend</strong><span>Sign for the output key, or reveal one script with a proof.</span>
+</li>
+<li><strong>Validate</strong><span>Use the prevout. Reconstruct the digest and check the appropriate signatures and conditions.</span>
+</li>
+</ol>
+<p>BIPs 340, 341 and 342 specify the signature and Taproot spending rules. Bech32m and BIP86 specify address and wallet conventions. PSBT is interchange metadata. MuSig2 is an off-chain signing protocol. Relay policy can be tighter than consensus, especially for upgrade hooks. Bitcoin’s verifier can check a key-path signature without learning any construction history.</p>
+<h2 id="mistakes">Common misconceptions</h2>
+<details>
+<summary>“P2TR is just P2WPKH with a new prefix.”</summary>
+<p>Its witness program contains a 32-byte output point coordinate. It uses v1 validation and a different signature scheme, with an optional script path.</p>
+</details>
+<details>
+<summary>“It still uses ECDSA because it uses secp256k1.”</summary>
+<p>BIP340 and ECDSA use the same group with different signature equations.</p>
+</details>
+<details>
+<summary>“Internal and output keys are the same.”</summary>
+<p>The internal even point P is an input to TapTweak. Q adds a public offset and is the key encoded in the UTXO.</p>
+</details>
+<details>
+<summary>“A tweak is random.”</summary>
+<p>It is deterministic from the x-only internal key and the optional Merkle root.</p>
+</details>
+<details>
+<summary>“The address is SHA256(pubkey).”</summary>
+<p>Bech32m encodes the version and actual 32-byte x(Q) witness program.</p>
+</details>
+<details>
+<summary>“The original private key can sign unchanged.”</summary>
+<p>Key-path signing uses the normalized internal scalar plus tweak and a final even-Y adjustment.</p>
+</details>
+<details>
+<summary>“Every spend reveals a script.”</summary>
+<p>Ordinary key path publishes one signature.</p>
+</details>
+<details>
+<summary>“All P2TR spends are multisig.”</summary>
+<p>Alice’s one-key wallet is P2TR too.</p>
+</details>
+<details>
+<summary>“Taproot automatically combines signatures.”</summary>
+<p>A coordinated protocol such as MuSig2 generates a joint signature. Independent signatures carry different challenges.</p>
+</details>
+<details>
+<summary>“MuSig2 is a P2TR consensus rule.”</summary>
+<p>The node verifies an ordinary BIP340 signature. How the wallet generated it is off chain.</p>
+</details>
+<details>
+<summary>“A Merkle root identifies the script without a proof.”</summary>
+<p>The verifier needs the leaf bytes and sibling hashes to reconstruct the committed root.</p>
+</details>
+<details>
+<summary>“Control contains the whole tree.”</summary>
+<p>It carries the header, internal key, and one hash per sibling subtree.</p>
+</details>
+<details>
+<summary>“Control parity equals ECDSA recovery yParity.”</summary>
+<p>Control records parity of full Q. ECDSA recovery uses a nonce-point candidate parity.</p>
+</details>
+<details>
+<summary>“Key path proves no script tree existed.”</summary>
+<p>The witness has the same shape either way.</p>
+</details>
+<details>
+<summary>“Taproot makes transactions private.”</summary>
+<p>Key path hides the unused policy. The amounts, input graph, and funding and spending times remain observable.</p>
+</details>
+<details>
+<summary>“An ECDSA signature can be converted into Schnorr.”</summary>
+<p>Changing the format does not change the signing equation or supply the new secret response.</p>
+</details>
+<details>
+<summary>“Every Taproot signature item is 64 bytes.”</summary>
+<p>Non-default sighash types append one byte. Empty signature slots in Tapscript are possible too.</p>
+</details>
+<details>
+<summary>“Any secp256k1 HSM can sign Taproot.”</summary>
+<p>The device needs the appropriate BIP340 functionality and a way to sign under the intended key.</p>
+</details>
+<details>
+<summary>“The seed is always enough.”</summary>
+<p>A complex vault can require separate keys, script bytes, a proof or tree, participant order, and derivation metadata.</p>
+</details>
+<h2 id="sources">Primary sources and reproducible fixtures</h2><div class="table-scroll" tabindex="0" role="region" aria-label="Specification comparison table">
+<table>
+<thead>
+<tr><th scope="col">Specification</th><th scope="col">Subject</th>
+</tr>
+</thead>
+<tbody>
+<tr><th scope=row><a href="https://bips.dev/340/">BIP340</a></th><td>Schnorr, x-only keys, parity and tagged hashes.</td>
+</tr>
+<tr><th scope=row><a href="https://bips.dev/341/">BIP341</a></th><td>Taproot output, spend classification, tree commitment and SigMsg.</td>
+</tr>
+<tr><th scope=row><a href="https://bips.dev/342/">BIP342</a></th><td>Tapscript validation and sighash extension.</td>
+</tr>
+<tr><th scope=row><a href="https://bips.dev/350/">BIP350</a></th><td>Bech32m address format.</td>
+</tr>
+<tr><th scope=row><a href="https://bips.dev/86/">BIP86</a></th><td>Single-key Taproot HD derivation.</td>
+</tr>
+<tr><th scope=row><a href="https://bips.dev/371/">BIP371</a></th><td>Taproot PSBT fields.</td>
+</tr>
+<tr><th scope=row><a href="https://bips.dev/327/">BIP327</a></th><td>MuSig2 protocol.</td>
+</tr>
+<tr><th scope=row><a href="https://bips.dev/68/">BIP68</a> · <a href="https://bips.dev/112/">BIP112</a></th><td>Relative sequence-lock semantics and CSV.</td>
+</tr>
+<tr><th scope=row><a href="https://github.com/bitcoin/bips/blob/master/bip-0340/test-vectors.csv">BIP340 vectors</a> · <a href="https://github.com/bitcoin/bips/blob/master/bip-0341/wallet-test-vectors.json">BIP341 vectors</a></th><td>Published expected bytes for independent comparison.</td>
+</tr>
+<tr><th scope=row><a href="https://blockstream.info/block/00000000000000000001f9ee4f69cbc75ce61db5178175c2ad021fe1df5bad8f">Mainnet block 709635</a></th><td>Historical inputs and outputs sourced from Esplora.</td>
+</tr>
+<tr><th scope=row><a href="https://github.com/bitcoin/bitcoin/blob/v28.1/src/script/interpreter.cpp">Bitcoin Core</a> · <a href="https://github.com/btcsuite/btcd/tree/v0.24.2/txscript">btcd</a></th><td>Reference implementations for signature hashing, script validation, and tree construction.</td>
+</tr>
+</tbody>
+</table></div>
+<p>The browser labs run locally using public fixtures and educational curve calculations. The bundled Go code demonstrates signing and script validation using established libraries. The teaching code and public demo keys are for practice.</p>
+  <nav class="page-turn" aria-label="Continue reading"><a href="./vault.html"><small>Previous</small>Capstone: Build and spend the vault</a><a href="./index.html"><small>Next</small>Guide overview</a>
+</nav>
+  </article>
+</main>
+  <footer class="bookfooter book-shell"><a href="./">Taproot field guide</a><a href="./reference.html#sources">Sources</a><a href="../">Learning index</a>
+</footer>
+</body>
+</html>

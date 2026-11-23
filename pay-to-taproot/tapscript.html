@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Executing Tapscript · Bitcoin Taproot</title>
+  <link rel="stylesheet" href="./lesson.css">
+  <link rel="stylesheet" href="./book.css">
+  <script type="module" src="./experiments.mjs"></script>
+</head>
+<body class="book">
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="bookbar"><div class="book-shell">
+    <a class="wordmark" href="./"><span aria-hidden="true">₿</span> Taproot field guide</a>
+    <nav aria-label="Site"><a href="./#contents">Contents</a><a href="./reference.html">Reference</a><a href="../">Learning index</a>
+</nav>
+  </div>
+</header>
+  <main id="main" class="book-shell chapter-layout">
+  <aside class="course-nav">
+<details>
+<summary>Chapters</summary>
+<nav aria-label="Chapters"><a  href="./why.html"><span>01</span>Why Taproot exists</a><a  href="./schnorr.html"><span>02</span>Schnorr and x-only keys</a><a  href="./keys.html"><span>03</span>From an internal key to an address</a><a  href="./signing.html"><span>04</span>Key-path spends and signature hashing</a><a  href="./trees.html"><span>05</span>Script trees and control blocks</a><a aria-current=page href="./tapscript.html"><span>06</span>Executing Tapscript</a><a  href="./cooperation.html"><span>07</span>Cooperative signing with MuSig2</a><a  href="./wallets.html"><span>08</span>BIP86 and wallet recovery</a><a  href="./transactions.html"><span>09</span>Reading confirmed transactions</a><a  href="./implementation.html"><span>10</span>Go, PSBT, and hardware signing</a><a  href="./vault.html"><span>11</span>Capstone: Build and spend the vault</a><a  href="./reference.html"><span>12</span>Glossary and worked reference</a>
+</nav>
+</details>
+<nav class="wide-nav" aria-label="Chapters"><a  href="./why.html"><span>01</span>Why Taproot exists</a><a  href="./schnorr.html"><span>02</span>Schnorr and x-only keys</a><a  href="./keys.html"><span>03</span>From an internal key to an address</a><a  href="./signing.html"><span>04</span>Key-path spends and signature hashing</a><a  href="./trees.html"><span>05</span>Script trees and control blocks</a><a aria-current=page href="./tapscript.html"><span>06</span>Executing Tapscript</a><a  href="./cooperation.html"><span>07</span>Cooperative signing with MuSig2</a><a  href="./wallets.html"><span>08</span>BIP86 and wallet recovery</a><a  href="./transactions.html"><span>09</span>Reading confirmed transactions</a><a  href="./implementation.html"><span>10</span>Go, PSBT, and hardware signing</a><a  href="./vault.html"><span>11</span>Capstone: Build and spend the vault</a><a  href="./reference.html"><span>12</span>Glossary and worked reference</a>
+</nav>
+</aside>
+  <article class="chapter">
+  <header class="chapter-head">
+<p class="overline">Part 6</p>
+<h1>Executing Tapscript</h1>
+  <p class="lede">Walk through a timelock and a 2-of-3 recovery stack one opcode at a time.</p>
+</header>
+  <nav class="local-nav" aria-label="On this page"><a href="#rules">A proven script still needs to pass</a><a href="#timelock">Alice’s delayed recovery</a><a href="#threshold">The trustee quorum uses three signature slots</a><a href="#exercises">Check your understanding</a>
+</nav>
+  <h2 id="rules">A proven script still needs to pass</h2>
+<p>The recovery witness proves that the funder committed to some bytes. Those bytes still have to authorize this transaction. With leaf version <code>c0</code>, Bitcoin evaluates them under BIP342. A one-key recovery rule can check a Schnorr signature. A quorum rule can count successful checks directly. Both use the script-path digest from Part 4.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Rule comparison table">
+<table>
+<thead>
+<tr><th scope="col">Rule</th><th scope="col">Version 0 P2WSH</th><th scope="col">Tapscript c0</th>
+</tr>
+</thead>
+<tbody>
+<tr><th scope=row>CHECKSIG / CHECKSIGVERIFY</th><td>ECDSA with applicable SegWit v0 rules.</td><td>BIP340 for a 32-byte public key. CHECKSIG leaves a boolean. CHECKSIGVERIFY requires success and removes it.</td>
+</tr>
+<tr><th scope=row>Multiple signatures</th><td>OP_CHECKMULTISIG searches key order and consumes a historical extra dummy.</td><td>OP_CHECKMULTISIG and VERIFY variant fail when executed. OP_CHECKSIGADD incorporates one key’s check into a numeric accumulator.</td>
+</tr>
+<tr><th scope=row>Timelocks</th><td>CSV and CLTV available.</td><td>Same relative sequence and absolute locktime rules.</td>
+</tr>
+<tr><th scope=row>Final stack and limits</th><td>Applicable v0 limits and final stack rules.</td><td>One truthy item. MINIMALIF requires exactly empty or 01 for IF/NOTIF. Stack + altstack limit is 1,000 elements. Each ordinary element is limited to 520 bytes. No old 10,000-byte script or 201 non-push-op limit.</td>
+</tr>
+<tr><th scope=row>Signature budget</th><td>Counts toward legacy/SegWit weighted sigop accounting.</td><td>Budget = 50 + serialized input witness size. Each executed signature opcode with nonempty signature spends 50. Below zero fails.</td>
+</tr>
+<tr><th scope=row>Upgrade hooks</th><td>SegWit and Script have their existing upgrade mechanisms.</td><td>Other leaf versions, unknown nonzero key lengths, and OP_SUCCESSx are upgrade hooks. Standard relay can discourage them.</td>
+</tr>
+</tbody>
+</table></div>
+<p>For a known 32-byte key, an empty signature gives false (or adds zero), and an invalid nonempty signature fails immediately. A zero-length public key fails. Unknown nonzero key lengths have an upgrade behavior for nonempty signatures and still consume budget. <code>OP_SUCCESSx</code> encountered while decoding an opcode makes a c0 script succeed immediately under current rules, even in an unexecuted branch. It is distinct from the same byte inside pushed data. Avoid relying on one as a restriction. This eager success can bypass checks including normal initial-stack limits. Future soft forks can assign stricter semantics.</p>
+<h2 id="timelock">Alice’s delayed recovery</h2>
+<p>Alice needs a signature that cannot spend immediately if Bob is unavailable. Set transaction version at least 2, sequence disable bit 31 clear and type bit 22 clear for block units, and low 16 bits at least 144. CSV enforces the transaction-level requirements. BIP68 separately enforces age against the chain: with sequence 144 and confirmation at height H, the earliest possible spending block is H+144. Setting a larger sequence can require additional blocks.</p>
+<pre class="equation"><code>&lt;144&gt; CHECKSEQUENCEVERIFY DROP &lt;x(AliceRecovery)&gt; CHECKSIG
+02 90 00 | b2 | 75 | 20 &lt;32 bytes&gt; | ac</code>
+</pre>
+<p>The first ScriptNum is little-endian signed-magnitude. 0x90 needs a trailing 00 to keep it positive. CSV reads but leaves the stack top, so DROP removes the delay before the key is pushed. The same policy in P2WSH can use a compressed public key and ECDSA. When wrapped inside a multi-branch P2WSH policy the whole witness script is disclosed. The vault’s Taproot cooperative spend leaves this script hidden.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Operation comparison table">
+<table>
+<thead>
+<tr><th scope="col">Operation</th><th scope="col">Before (bottom → top)</th><th scope="col">After</th>
+</tr>
+</thead>
+<tbody>
+<tr><th scope=row>Push 144</th><td>[sig_A]</td><td>[sig_A,144]</td>
+</tr>
+<tr><th scope=row>CHECKSEQUENCEVERIFY</th><td>[sig_A,144]</td><td>Same, or fails if the sequence requirements do not hold.</td>
+</tr>
+<tr><th scope=row>DROP</th><td>[sig_A,144]</td><td>[sig_A]</td>
+</tr>
+<tr><th scope=row>Push x(A)</th><td>[sig_A]</td><td>[sig_A,x(A)]</td>
+</tr>
+<tr><th scope=row>CHECKSIG</th><td>[sig_A,x(A)]</td><td>[1] after a valid signature. Empty yields [0]. An invalid nonempty item fails.</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="threshold">The trustee quorum uses three signature slots</h2>
+<p>Leaf B first enforces a delay of 4,320 blocks and drops the delay value, using the same mechanism as Leaf A. Then it counts approvals. Trustees A, B, and C in this section are three separate people holding distinct script keys. They are independent of Alice and Bob’s cooperative keys.</p>
+<pre class="equation"><code>&lt;x(A)&gt; CHECKSIG &lt;x(B)&gt; CHECKSIGADD &lt;x(C)&gt; CHECKSIGADD 2 NUMEQUAL
+Initial recovery witness arguments, bottom → top: [sig_C, empty, sig_A]</code>
+</pre>
+<p>The first CHECKSIG pops key and signature, producing a count of one for trustee A. For each CHECKSIGADD, the popped values from top down are key, numeric accumulator, signature. An empty signature is a zero-byte item (its witness length is 00). It contributes zero. Signer C adds one, then the script compares the count to 2. This exact-equality policy requires exactly two successful slots, so a wallet with all three approvals chooses two for the witness. Everyone can see the full set of three keys and which two slots carried signatures.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Check comparison table">
+<table>
+<thead>
+<tr><th scope="col">Check</th><th scope="col">Before (bottom → top)</th><th scope="col">After</th>
+</tr>
+</thead>
+<tbody>
+<tr><th scope=row>CHECKSIG A</th><td>[sig_C,empty,sig_A,x(A)]</td><td>[sig_C,empty,1]</td>
+</tr>
+<tr><th scope=row>CHECKSIGADD B</th><td>[sig_C,empty,1,x(B)]</td><td>[sig_C,1]</td>
+</tr>
+<tr><th scope=row>CHECKSIGADD C</th><td>[sig_C,1,x(C)]</td><td>[2]</td>
+</tr>
+<tr><th scope=row>2 NUMEQUAL</th><td>[2,2] just before comparison</td><td>[1]</td>
+</tr>
+</tbody>
+</table></div>
+<section class="workbench" id="stack-lab" aria-labelledby="stack-lab-title">
+<h3 id="stack-lab-title">Step through both recovery stacks</h3><div class="control-row"><label>Policy<select name="policy"><option value="delayed">Leaf A · Alice after 144 blocks</option><option value="quorum">Leaf B · trustee quorum</option></select></label><label>Show steps through<select name="step"><option value="0">Step 1</option><option value="1">Step 2</option><option value="2">Step 3</option><option value="3">Step 4</option><option value="4">Step 5</option><option value="5">Step 6</option></select></label></div><div class="experiment-result" data-result aria-live="polite"></div>
+</section>
+<p>The <a href="./vault.html#capstone-lab">vault fixture</a> contains the fully signed delayed and quorum inputs. The Go program verifies both with a script engine, and also signs a sequence-143 attempt that fails at CSV.</p>
+<h2 id="exercises">Check your understanding</h2><div class="exercise">
+<p><strong>Level 1 · What happens if a signer places an invalid nonempty signature in a slot?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>Separate empty from invalid.</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>For a 32-byte key, BIP342 fails immediately on a nonempty invalid signature. Leave an absent signer’s slot empty so CHECKSIGADD adds zero.</p>
+</details></div><div class="exercise">
+<p><strong>Level 2 · Why is a compressed key serialized differently in the P2WSH version?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>Which signature rules run for each version?</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>P2WSH uses SEC1 compressed keys for ordinary standard ECDSA spends. Tapscript uses the 32-byte x-only BIP340 key. The stack policies can otherwise have the same CSV intent.</p>
+</details></div><div class="exercise">
+<p><strong>Level 3 · If Alice’s UTXO confirmed at height 900000 and her nSequence is 144, when can the spend be mined?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>Check BIP68 separately from CSV.</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>Earliest height 900144. A correctly signed transaction with nSequence=143 still fails CSV, and a 144 sequence can pass script execution while failing age validation in an earlier block.</p>
+</details></div>
+<p><span class="source-label">Specifications</span> <a href="https://bips.dev/68/">BIP 68</a> · <a href="https://bips.dev/112/">BIP 112</a> · <a href="https://bips.dev/342/">BIP 342</a> · <a href="https://bips.dev/65/">BIP 65</a> · <a href="https://bips.dev/141/">BIP 141</a>
+</p>
+  <nav class="page-turn" aria-label="Continue reading"><a href="./trees.html"><small>Previous</small>Script trees and control blocks</a><a href="./cooperation.html"><small>Next</small>Cooperative signing with MuSig2</a>
+</nav>
+  </article>
+</main>
+  <footer class="bookfooter book-shell"><a href="./">Taproot field guide</a><a href="./reference.html#sources">Sources</a><a href="../">Learning index</a>
+</footer>
+</body>
+</html>

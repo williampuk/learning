@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Script trees and control blocks · Bitcoin Taproot</title>
+  <link rel="stylesheet" href="./lesson.css">
+  <link rel="stylesheet" href="./book.css">
+  <script type="module" src="./lesson.mjs"></script><script type="module" src="./experiments.mjs"></script>
+</head>
+<body class="book">
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="bookbar"><div class="book-shell">
+    <a class="wordmark" href="./"><span aria-hidden="true">₿</span> Taproot field guide</a>
+    <nav aria-label="Site"><a href="./#contents">Contents</a><a href="./reference.html">Reference</a><a href="../">Learning index</a>
+</nav>
+  </div>
+</header>
+  <main id="main" class="book-shell chapter-layout">
+  <aside class="course-nav">
+<details>
+<summary>Chapters</summary>
+<nav aria-label="Chapters"><a  href="./why.html"><span>01</span>Why Taproot exists</a><a  href="./schnorr.html"><span>02</span>Schnorr and x-only keys</a><a  href="./keys.html"><span>03</span>From an internal key to an address</a><a  href="./signing.html"><span>04</span>Key-path spends and signature hashing</a><a aria-current=page href="./trees.html"><span>05</span>Script trees and control blocks</a><a  href="./tapscript.html"><span>06</span>Executing Tapscript</a><a  href="./cooperation.html"><span>07</span>Cooperative signing with MuSig2</a><a  href="./wallets.html"><span>08</span>BIP86 and wallet recovery</a><a  href="./transactions.html"><span>09</span>Reading confirmed transactions</a><a  href="./implementation.html"><span>10</span>Go, PSBT, and hardware signing</a><a  href="./vault.html"><span>11</span>Capstone: Build and spend the vault</a><a  href="./reference.html"><span>12</span>Glossary and worked reference</a>
+</nav>
+</details>
+<nav class="wide-nav" aria-label="Chapters"><a  href="./why.html"><span>01</span>Why Taproot exists</a><a  href="./schnorr.html"><span>02</span>Schnorr and x-only keys</a><a  href="./keys.html"><span>03</span>From an internal key to an address</a><a  href="./signing.html"><span>04</span>Key-path spends and signature hashing</a><a aria-current=page href="./trees.html"><span>05</span>Script trees and control blocks</a><a  href="./tapscript.html"><span>06</span>Executing Tapscript</a><a  href="./cooperation.html"><span>07</span>Cooperative signing with MuSig2</a><a  href="./wallets.html"><span>08</span>BIP86 and wallet recovery</a><a  href="./transactions.html"><span>09</span>Reading confirmed transactions</a><a  href="./implementation.html"><span>10</span>Go, PSBT, and hardware signing</a><a  href="./vault.html"><span>11</span>Capstone: Build and spend the vault</a><a  href="./reference.html"><span>12</span>Glossary and worked reference</a>
+</nav>
+</aside>
+  <article class="chapter">
+  <header class="chapter-head">
+<p class="overline">Part 5</p>
+<h1>Script trees and control blocks</h1>
+  <p class="lede">Build a commitment, reveal one leaf, and reconstruct the output from the proof.</p>
+</header>
+  <nav class="local-nav" aria-label="On this page"><a href="#policies">Why keep fallback policies in a tree?</a><a href="#construction">Make each rule a leaf</a><a href="#commit-tree">Bind the tree to one output</a><a href="#lab">Experiments F and G · Build the tree and trace a proof</a><a href="#control">What the spender actually reveals</a><a href="#proof-recipe">The control block is a proof recipe</a><a href="#verifier">Experiment H · Decode the control block and verify membership</a><a href="#validation">Membership comes before policy satisfaction</a><a href="#exercises">Check your understanding</a>
+</nav>
+  <h2 id="policies">Why keep fallback policies in a tree?</h2>
+<p>If Alice and Bob can both approve today, the key path suffices. The point of the vault is to remain usable if a signer is unavailable. A delayed recovery leaf grants Alice recovery while giving the normal operators time to respond. In an inheritance policy, estate trustees can act under a delay. In escrow, a designated adjudicator can resolve a dispute when the ordinary parties stop cooperating. A leaf describes a spending rule, and every path you add is another way control can be exercised.</p>
+<p>There is a key-path rule for every valid output key. Practical access depends on whether anyone knows or collectively controls its secret. A script-only design can use a convincingly generated point with no known discrete logarithm for P. Knowing the public tweak then gives no known secret for Q either. BIP341 discusses verifiable NUMS internal keys and an optional randomized construction. A key-path spend cannot prove whether any hidden tree originally existed.</p>
+<h2 id="construction">Make each rule a leaf</h2><div class="table-scroll" tabindex="0" role="region" aria-label="Leaf comparison table">
+<table>
+<thead>
+<tr><th scope="col">Leaf</th><th scope="col">Vault rule</th><th scope="col">What the witness needs</th>
+</tr>
+</thead>
+<tbody>
+<tr><th scope=row>A</th><td>Alice’s dedicated recovery key after 144 blocks.</td><td>One BIP340 signature.</td>
+</tr>
+<tr><th scope=row>B</th><td>Any two of the three trustees after 4,320 blocks.</td><td>Two signatures and one empty slot.</td>
+</tr>
+<tr><th scope=row>C</th><td>Designated arbiter after agreed height 1,000,000.</td><td>One arbiter signature with a suitable nLockTime and non-final sequence.</td>
+</tr>
+</tbody>
+</table></div>
+<ol class="flow" aria-label="Process diagram">
+<li><strong>Commit to scripts</strong><span>Hash version, length, and exact bytes for each rule.</span>
+</li>
+<li><strong>Combine hashes</strong><span>Group B and C. Place A beside that subtree.</span>
+</li>
+<li><strong>Reuse the tweak</strong><span>Root m becomes the final 32 bytes of TapTweak’s data.</span>
+</li>
+<li><strong>Fund x(Q)</strong><span>A recipient sees a P2TR program regardless of the tree.</span>
+</li>
+</ol>
+<pre class="equation"><code>L = H_TapLeaf(v || CompactSize(len(S)) || S)
+Branch(a, b) = H_TapBranch(min(a,b) || max(a,b))
+m = Branch(L_A, Branch(L_B, L_C))</code>
+</pre>
+<p>A script S is a public byte string when revealed. Version v is the single byte <code>c0</code> for Tapscript. It belongs in the hash so changing the interpretation changes the commitment. Length is an integer serialized as CompactSize. With <code>OP_1</code> (51) the exact data after the tag prefix is <code>c0 01 51</code>. With a 253-byte script the length prefix is <code>fd fd 00</code>. The branch inputs a and b are each 32-byte child hashes. Bounds or comparisons on these bytes use lexicographic order, with the first unequal unsigned byte deciding.</p>
+<p>Swapping siblings within one branch keeps the root. Moving a leaf to a different pair generally changes the root. A single leaf is itself the root. A valid tree can be unbalanced. With A at depth 1, revealing A costs one sibling while revealing B costs two. Placement can favor the path most likely to be used, at the cost of different disclosure and witness sizes.</p>
+<h2 id="commit-tree">Bind the tree to one output</h2>
+<p>The root m is a compact receipt for the whole tree. Append its 32 bytes to x(P) before TapTweak. A new delay changes script bytes, the leaf hash and every ancestor on its route to the root. Adding or removing a leaf changes that recipe too. Replacing P changes the tweak’s first 32 bytes even if the script tree stays identical. In all cases the derived x(Q) generally changes and so does its Bech32m address.</p>
+<pre class="equation"><code>m from the tree  →  t = int(H_TapTweak(x(P) || m))  →  Q = P + tG  →  51 20 x(Q)</code>
+</pre>
+<h2 id="lab">Experiments F and G · Build the tree and trace a proof</h2>
+<p>Start with scripts 51, 52 and 00. Select Leaf B. The highlighted branch derives its hash from B plus C, then combines with A. Change script bytes or the version, remove a leaf, or add a new one. Try a different internal key or regrouping. Use the capstone or delayed recovery preset to change Leaf A’s <code>029000</code> push (144) to <code>029100</code> (145).</p><div class="legacy-lab"><div class="lab-grid">
+        <form class="panel controls" id="builder">
+          <h3>Tree inputs</h3>
+          <label for="preset">Example</label>
+          <select id="preset">
+            <option value="toy">Toy · three tiny scripts</option>
+            <option value="single">Toy · single OP_1 leaf</option>
+            <option value="empty">Toy · key path only</option>
+            <option value="recovery">Wallet pattern · delayed recovery</option>
+            <option value="vault">Capstone · Alice and Bob’s vault</option><option value="vector">BIP 341 · three signature leaves</option>
+          </select>
+          <p class="hint" id="preset-note">
+</p>
+          <label for="internal-key">Internal public key · x-only hex</label>
+          <input id="internal-key" class="hex" type="text" maxlength="128" spellcheck="false" autocomplete="off" autocapitalize="off">
+          <div id="grouping-field" hidden>
+            <label for="grouping">Tree shape · leaf nearest the root</label>
+            <select id="grouping">
+              <option value="0">A beside (B, C)</option>
+              <option value="1">B beside (A, C)</option>
+              <option value="2">C beside (A, B)</option>
+            </select>
+          </div>
+          <div id="leaf-fields"></div><button class="quiet" id="add-leaf" type="button">Add a leaf</button>
+          <button class="primary" type="submit">Recalculate tree</button>
+          <p id="build-status" class="status" role="status">
+</p>
+        </form>
+
+        <div class="panel tree-panel">
+          <h3>Merkle tree</h3>
+          <p class="hint" id="tree-hint">Select a leaf to trace its commitment.</p>
+          <div id="tree" role="region" tabindex="0" aria-label="Script tree"></div>
+          <p class="legend"><span><i class="path-color"></i> Selected path</span><span><i class="sibling-color"></i> Sibling hash in proof</span>
+</p>
+          <dl class="readouts" id="tree-values">
+</dl>
+<details id="branch-details" hidden>
+<summary>Inspect all TapBranch inputs</summary>
+<dl class="readouts" id="branch-bytes">
+</dl>
+</details>
+          <button class="quiet" type="button" id="send-proof" disabled>Open selected proof in verifier</button>
+        </div>
+      </div></div>
+<h2 id="control">What the spender actually reveals</h2>
+<pre class="equation"><code>Script-path witness = [arguments…] [revealed script] [control block] [optional annex]
+Control block       = [header:1] [internal x(P):32] [sibling 1:32] … [sibling d:32]</code>
+</pre>
+<p>After removing a recognized annex, two or more remaining items use the script path. The last is control, the previous one is the script, and earlier items form the initial stack. For the capstone’s Leaf A, the lengths are 64 bytes for a DEFAULT signature, 39 bytes for the script, and 65 for control. Each element has a CompactSize length prefix and the witness begins with its item count. A P2WSH witness includes the whole witness script and no Merkle proof.</p>
+<h2 id="proof-recipe">The control block is a proof recipe</h2>
+<dl class="byte-layout" aria-label="Control block offsets"><div>
+<dt>0</dt>
+<dd>Leaf version and parity</dd></div><div>
+<dt>1–32</dt>
+<dd>x(P)</dd></div><div>
+<dt>33–64</dt>
+<dd>Sibling nearest the leaf</dd></div><div>
+<dt>65 onward</dt>
+<dd>Higher siblings, 32 bytes each</dd></div>
+</dl>
+<p>The first control byte is <code>leaf_version | (y(Q) &amp; 1)</code>. Decode version with <code>&amp; 0xfe</code> and parity with <code>&amp; 1</code>. The parity is from the full output point Q, independent of the internal key’s even-Y lift and the Schnorr nonce’s parity. BIP341 includes this bit so a verifier can reconstruct one specific output point for batch verification. With d sibling hashes, size is <code>33 + 32d</code> bytes for depth 0 through 128. Here d means depth only. The signing scalar d used elsewhere is a different quantity.</p>
+<p>The internal key is necessary to reconstruct the tweak and Q. The nearest sibling comes first, because each new parent becomes the accumulator at the next level. Left versus right at the same level is immaterial after sorting. Swapping two <em>levels</em> in the proof generally fails. A valid proof exposes the path length, leaf version, a key, and hashes of sibling subtrees. The hashes do not give the scripts, but a known or guessable subtree can be tested against a revealed hash.</p>
+<h2 id="verifier">Experiment H · Decode the control block and verify membership</h2>
+<h3 id="verify-title" tabindex="-1">Choose a recorded or custom proof</h3>
+<p>Load a recorded spend or send a leaf from the builder. In the confirmed signature spend the header <code>c0</code> means version c0 and even Q. Bytes 1–32 are x(P). Bytes 33–64 are the one sibling hash. The trace computes the TapLeaf, sorted branch input, full root, tweak, x(Q), and parity.</p><div class="control-row"><button type="button" class="primary chain-load" data-example="0">Load mainnet CHECKSIG proof</button><button type="button" class="quiet chain-load" data-example="1">Load mainnet OP_1 proof</button></div><div class="legacy-lab"><div class="lab-grid verifier-grid">
+        <form id="proof-form" class="panel controls">
+          <h3>Proof inputs</h3>
+          <p id="proof-source" class="hint">Use the tree lab, load a mainnet example, or paste your own proof.</p>
+          <label for="expected-key">Expected <code>x(Q)</code> · 32-byte hex</label>
+          <input id="expected-key" class="hex" type="text" maxlength="128" spellcheck="false" autocomplete="off" autocapitalize="off">
+          <label for="revealed-script">Revealed script · hex</label>
+          <textarea id="revealed-script" rows="2" class="hex" maxlength="200000" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+          <label for="control-block">Control block · hex</label>
+          <textarea id="control-block" rows="4" class="hex" maxlength="12500" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+          <div class="actions">
+            <button class="primary" type="submit">Verify commitment</button>
+            <button class="quiet" type="button" id="flip-parity">Flip header parity</button>
+          </div>
+        </form>
+        <div class="panel proof-panel">
+          <h3>Verification trace</h3>
+          <p class="status" id="proof-status" role="status">Load an example to begin.</p>
+          <div id="proof-results"></div>
+        </div>
+      </div>
+      </div>
+<h2 id="validation">Membership comes before policy satisfaction</h2>
+<ol class="flow" aria-label="Process diagram">
+<li><strong>Parse witness</strong><span>Find the prevout program, remove annex if present, then extract script and control.</span>
+</li>
+<li><strong>Prove membership</strong><span>Check control length and leaf version. Hash the revealed leaf, fold siblings, lift P, and reconstruct Q.</span>
+</li>
+<li><strong>Check x and parity</strong><span>Compare x(Q) with the prevout and parity with the header.</span>
+</li>
+<li><strong>Apply the leaf rules</strong><span>For c0 execute Tapscript and validate signatures, timelocks, and final stack.</span>
+</li>
+</ol>
+<p>Wrong script bytes, wrong sibling bytes, or a wrong sibling order fail reconstruction. Wrong parity can fail even when x(Q) matches. Once the commitment passes, bad arguments or a bad signature fail execution. An unassigned leaf version that passes commitment checks currently succeeds under consensus. Default relay policy can still reject it. A future soft fork can define tighter rules for it. The interactive proof verifier checks the membership stage. The experiment below and the Tapscript chapter explain the execution stage.</p>
+<section class="workbench" id="failure-lab" aria-labelledby="failure-lab-title">
+<h3 id="failure-lab-title">Experiment K · Break one stage at a time</h3><label>Attempt<select name="failure"><option value="valid">Original mainnet witness</option><option value="script">Change one revealed script byte</option><option value="sibling">Change a Merkle sibling</option><option value="order">Reverse a two-level proof</option><option value="parity">Flip control parity</option><option value="early">Spend before the required sequence</option><option value="empty">Remove a required signature argument</option><option value="sig">Change a Schnorr signature byte</option><option value="zero-type">Append the forbidden 00 sighash byte</option><option value="digest">Hash the wrong prevout amount</option></select></label><div class="experiment-result" data-result aria-live="polite"></div>
+</section><div class="workbench">
+<h3>Compare with the published specification</h3><button id="vector-check" class="quiet" type="button">Run all seven BIP341 output vectors</button>
+<p id="vector-status" class="status" role="status">
+</p></div>
+<h2 id="exercises">Check your understanding</h2><div class="exercise">
+<p><strong>Level 1 · What does the low bit of a control block encode?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>Which point is reconstructed from the tree?</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>It is the parity of the full tweaked output point Q. The other parity conventions apply to different points.</p>
+</details></div><div class="exercise">
+<p><strong>Level 2 · In A beside (B,C), reconstruct the root from Leaf C.</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>Begin with C’s TapLeaf hash and use the nearest sibling.</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>Combine L_C and L_B with sorted TapBranch first. Then pair the resulting branch hash with L_A, again sorting the two inputs.</p>
+</details></div><div class="exercise">
+<p><strong>Level 3 · Load the real OP_1 leaf. Why is its control block 33 bytes?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>Count its siblings and inspect its script.</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>There is a header and one 32-byte internal key, with zero siblings. Leaf hash equals root. The script pushes true without a witness argument.</p>
+</details></div>
+<p><span class="source-label">Specifications</span> <a href="https://bips.dev/341/">BIP 341</a> · <a href="https://bips.dev/342/">BIP 342</a>
+</p>
+  <nav class="page-turn" aria-label="Continue reading"><a href="./signing.html"><small>Previous</small>Key-path spends and signature hashing</a><a href="./tapscript.html"><small>Next</small>Executing Tapscript</a>
+</nav>
+  </article>
+</main>
+  <footer class="bookfooter book-shell"><a href="./">Taproot field guide</a><a href="./reference.html#sources">Sources</a><a href="../">Learning index</a>
+</footer>
+</body>
+</html>

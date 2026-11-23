@@ -5,7 +5,7 @@ import {
 import { chainExamples, walletVectors } from "./examples.mjs";
 
 const get = id => document.getElementById(id);
-const labels = ["A", "B", "C"];
+const labels = "ABCDEFGH";
 const recoveryKey = "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5";
 const reference = walletVectors[5];
 const leaf = (id, script, version = 0xc0) => ({ id, script, version });
@@ -37,6 +37,8 @@ const presets = {
   },
 };
 let built = null;
+let presetRequest = 0;
+let vaultPreset;
 let selected = 0;
 let buildRequest = 0;
 let proofRequest = 0;
@@ -94,35 +96,89 @@ function readouts(items) {
   });
 }
 
-function activePreset() {
-  return presets[get("preset").value];
+function appendLeaf(item) {
+  const group = element("fieldset", "leaf-fields");
+  group.dataset.leafField = item.id;
+  const inputs = element("div", "leaf-inputs");
+  inputs.append(
+    field("Script hex", "script-" + item.id, item.script, 200000),
+    field("Version", "version-" + item.id, item.version.toString(16).padStart(2, "0"), 2),
+  );
+  const remove = element("button", "quiet", "Remove leaf " + labels[item.id]);
+  remove.type = "button";
+  remove.addEventListener("click", () => {
+    group.remove();
+    updateGrouping();
+    recalculate();
+    get("add-leaf").focus();
+  });
+  group.append(element("legend", "", "Leaf " + labels[item.id]), inputs, remove);
+  get("leaf-fields").append(group);
 }
 
-function loadPreset() {
-  const preset = activePreset();
+function leafIds() {
+  return Array.from(get("leaf-fields").children, field => Number(field.dataset.leafField));
+}
+
+function updateGrouping() {
+  const ids = leafIds();
+  const select = get("grouping");
+  const previous = Number(select.value);
+  get("grouping-field").hidden = ids.length < 3;
+  select.replaceChildren(...ids.map(id => {
+    const option = element("option", "", "Leaf " + labels[id] + " at depth 1");
+    option.value = id;
+    return option;
+  }));
+  select.value = ids.includes(previous) ? previous : ids[0];
+  get("add-leaf").disabled = ids.length >= labels.length;
+  if (!ids.includes(selected)) selected = ids[0];
+}
+
+async function loadPreset() {
+  const request = ++presetRequest;
+  let preset = presets[get("preset").value];
+  if (!preset) {
+    buildRequest++;
+    clearBuild();
+    status("build-status", "Loading the vault example…");
+    try {
+      vaultPreset ??= await fetch("./vault-data.json").then(response => {
+        if (!response.ok) throw new Error("Could not load the vault example.");
+        return response.json();
+      }).then(({ vault }) => ({
+        key: vault.internalKey,
+        tree: vault.scripts.map((script, i) => leaf(i, script)),
+        note: "Alice and Bob jointly control P. A is Alice’s 144-block recovery, B is the delayed trustee quorum, and C is the arbiter’s height-locked leaf. These are public demonstration keys.",
+      }));
+      preset = vaultPreset;
+    } catch (error) {
+      if (request === presetRequest) status("build-status", error.message, "bad");
+      return;
+    }
+  }
+  if (request !== presetRequest) return;
   get("preset-note").textContent = preset.note;
   get("internal-key").value = preset.key;
-  get("grouping-field").hidden = !Array.isArray(preset.tree);
-  get("grouping").value = "0";
-  const fields = collectLeaves(preset.tree).map(item => {
-    const group = element("fieldset", "leaf-fields");
-    const inputs = element("div", "leaf-inputs");
-    inputs.append(
-      field("Script hex", "script-" + item.id, item.script, 200000),
-      field("Version", "version-" + item.id, item.version.toString(16).padStart(2, "0"), 2),
-    );
-    group.append(element("legend", "", "Leaf " + labels[item.id]), inputs);
-    return group;
-  });
-  get("leaf-fields").replaceChildren(...fields);
+  get("leaf-fields").replaceChildren();
+  collectLeaves(preset.tree).forEach(appendLeaf);
+  get("grouping").replaceChildren();
   selected = 0;
+  updateGrouping();
   recalculate();
+}
+
+function balanced(leaves) {
+  if (leaves.length <= 1) return leaves[0] ?? null;
+  const mid = Math.floor(leaves.length / 2);
+  return [balanced(leaves.slice(0, mid)), balanced(leaves.slice(mid))];
 }
 
 function clearBuild() {
   built = null;
   get("tree").replaceChildren();
   get("tree-values").replaceChildren();
+  get("branch-details").hidden = true;
   get("tree-hint").textContent = "Recalculate to show the current commitment.";
   get("send-proof").disabled = true;
 }
@@ -133,20 +189,17 @@ async function recalculate() {
   status("build-status", "Calculating commitment…");
   try {
     const internalKey = readHex(get("internal-key").value, "Internal key", 32);
-    const presetTree = activePreset().tree;
-    const leaves = collectLeaves(presetTree);
-    const shallow = Number(get("grouping").value);
-    const shape = Array.isArray(presetTree)
-      ? [leaves[shallow], leaves.filter(item => item.id !== shallow)]
-      : presetTree;
-    const inputs = mapLeaves(shape, item => {
-      const name = "Leaf " + labels[item.id];
-      const [version] = readHex(get("version-" + item.id).value, name + " version", 1);
+    const leaves = leafIds().map(id => {
+      const name = "Leaf " + labels[id];
+      const [version] = readHex(get("version-" + id).value, name + " version", 1);
       if ((version & 1) || version === 0x50) {
         throw new Error(name + " needs an even version other than 50.");
       }
-      return { ...item, version, script: readHex(get("script-" + item.id).value, name + " script") };
+      return { id, version, script: readHex(get("script-" + id).value, name + " script") };
     });
+    const shallow = Number(get("grouping").value);
+    const inputs = leaves.length < 3 ? balanced(leaves)
+      : [leaves.find(item => item.id === shallow), balanced(leaves.filter(item => item.id !== shallow))];
     const tree = await commitTree(inputs);
     const output = await outputKey(internalKey, tree?.hash ?? null);
     if (request !== buildRequest) return;
@@ -211,6 +264,18 @@ function renderTree() {
     ["Mainnet Bech32m address", mainnetAddress(output.key)],
   );
   get("tree-values").replaceChildren(...readouts(values));
+  const branches = [];
+  const recordBranch = (node) => {
+    if (!node.children) return;
+    const [left, right] = node.children;
+    const inputs = [hex(left.hash), hex(right.hash)].sort();
+    branches.push(["TapBranch · sorted child hashes", inputs.join("\n")],
+      ["Parent hash", hex(node.hash)]);
+    node.children.forEach(recordBranch);
+  };
+  if (tree) recordBranch(tree);
+  get("branch-bytes").replaceChildren(...readouts(branches));
+  get("branch-details").hidden = branches.length === 0;
   get("send-proof").disabled = !proof;
 }
 
@@ -257,9 +322,15 @@ function renderVerification(result, control) {
   const leafStep = element("li", "", "TapLeaf · hash the version, length and script");
   leafStep.append(element("code", "", hex(item.hash)));
   trace.append(leafStep);
+  let previous = hex(item.hash);
   steps.forEach(({ sibling, hash }, index) => {
     const step = element("li", "", "TapBranch · combine with sibling " + (index + 1));
-    step.append(element("code", "", "Sibling: " + hex(sibling)), element("code", "", "Result: " + hex(hash)));
+    const other = hex(sibling);
+    const sorted = previous <= other ? [previous, other] : [other, previous];
+    step.append(element("code", "", "Sibling: " + other),
+      element("code", "", "Hash input: " + sorted.join(" | ")),
+      element("code", "", "Result: " + hex(hash)));
+    previous = hex(hash);
     trace.append(step);
   });
 
@@ -326,6 +397,15 @@ async function checkVector(vector) {
 }
 
 get("preset").addEventListener("change", loadPreset);
+get("add-leaf").addEventListener("click", () => {
+  const used = leafIds();
+  const id = Array.from(labels, (_, index) => index).find(index => !used.includes(index));
+  if (id === undefined) return;
+  appendLeaf(leaf(id, "51"));
+  updateGrouping();
+  recalculate();
+  get("script-" + id).focus();
+});
 get("grouping").addEventListener("change", recalculate);
 get("builder").addEventListener("submit", event => {
   event.preventDefault();

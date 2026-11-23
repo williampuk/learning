@@ -4,222 +4,80 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#10121a">
-  <meta name="description" content="An interactive Bitcoin Taproot lesson. Build a script tree, trace a Merkle proof, and verify real mainnet witness data.">
-  <title>Pay-to-Taproot Script Trees | Interactive Learning</title>
+  <title>Visual guide · Bitcoin Taproot</title>
   <link rel="stylesheet" href="./lesson.css">
-  <script type="module" src="./lesson.mjs"></script>
+  <link rel="stylesheet" href="./book.css">
+
 </head>
-<body>
-  <a class="skip" href="#main">Skip to content</a>
-  <header class="top">
-    <div class="shell top-inner">
-      <a class="back" href="../"><span class="mark" aria-hidden="true"></span>Interactive Learning</a>
-      <span class="topic">Bitcoin</span>
+<body class="book">
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="bookbar"><div class="book-shell">
+    <a class="wordmark" href="./"><span aria-hidden="true">₿</span> Taproot field guide</a>
+    <nav aria-label="Site"><a href="./#contents">Contents</a><a href="./reference.html">Reference</a><a href="../">Learning index</a>
+</nav>
+  </div>
+</header>
+  <main id="main" class="book-shell">
+  <section class="course-hero">
+    <div>
+      <p class="overline">Bitcoin · Visual textbook</p>
+      <h1>Bitcoin Taproot,<br><em>from first principles.</em>
+</h1>
+      <p class="lede">You already know what a P2WPKH witness reveals. Start there, then follow one Taproot output from its spending policy to the exact bytes a Bitcoin node verifies.</p>
+      <div class="actions"><a href="./why.html" class="primary">Start with why</a><a href="#contents" class="secondary">Browse chapters</a></div>
     </div>
-  </header>
-
-  <main id="main" class="shell">
-    <div class="hero">
-      <div class="hero-copy">
-        <h1>Pay-to-Taproot<br><em>Script Trees</em></h1>
-        <p>How does one <code>bc1p…</code> output commit to several ways of spending it? Build the commitment, reveal one branch, and check the proof against real Bitcoin transactions.</p>
-        <div class="actions">
-          <a class="button primary" href="#lab">Open the tree lab</a>
-          <a class="button quiet" href="#verifier">Verify a proof</a>
-        </div>
+    <figure class="hero-map" aria-label="A single Taproot output supports a cooperative spend or a recovery spend">
+      <div class="hero-node"><span>Funding output</span><code>OP_1 &lt;32-byte key&gt;</code></div>
+      <div class="hero-fork">
+        <div><b>Cooperate</b><span>One signature</span></div>
+        <div><b>Recover</b><span>One script and its proof</span></div>
       </div>
-      <figure class="hero-figure" aria-label="The internal key and Merkle root combine into the output key, which is encoded as a bc1p address.">
-        <div class="flow" aria-hidden="true">
-          <div><strong>P</strong><span>Internal key</span></div>
-          <span class="operator">with</span>
-          <div><strong>m</strong><span>Merkle root</span></div>
-        </div>
-        <div class="flow-line" aria-hidden="true"></div>
-        <div class="flow-output" aria-hidden="true">
-          <strong>Q</strong><span>Tweaked output key</span>
-        </div>
-        <figcaption><code>bc1p…</code> encodes the x coordinate of Q</figcaption>
-      </figure>
-    </div>
-
-    <nav class="lesson-nav" aria-label="In this lesson">
-      <a href="#output">The output</a>
-      <a href="#lab">Tree lab</a>
-      <a href="#verifier">Proof verifier</a>
-      <a href="#mainnet">Mainnet examples</a>
-      <a href="#sources">Sources</a>
-    </nav>
-
-    <section class="lesson-section" id="output" aria-labelledby="output-title">
-      <h2 id="output-title">One output, two ways to spend</h2>
-      <p class="intro">A P2TR output is native SegWit version 1 with a 32-byte witness program. That program is <code>x(Q)</code>, the x coordinate of the output public key. A spend chooses between a signature for that key and a script revealed with a Merkle proof.</p>
-      <div class="split">
-        <article class="panel">
-          <h3><span class="small-mark key-mark" aria-hidden="true"></span>Key path</h3>
-          <div class="witness" aria-label="Key-path witness"><code>Schnorr signature</code></div>
-          <p>Bitcoin checks the signature against <code>x(Q)</code>. The witness reveals neither the internal key nor whether any scripts were committed. A wallet that knows the internal secret can adjust it by the tweak, with BIP 340’s parity handling.</p>
-        </article>
-        <article class="panel">
-          <h3><span class="small-mark script-mark" aria-hidden="true"></span>Script path</h3>
-          <div class="witness" aria-label="Script-path witness"><code>stack inputs…</code><code>script</code><code>control block</code></div>
-          <p>Bitcoin reconstructs <code>Q</code> to check the commitment, then applies the rules for the leaf version. For Tapscript, that includes executing the revealed script. Sibling hashes can reveal the depth, while other scripts stay undisclosed unless exposed elsewhere or guessed.</p>
-        </article>
-      </div>
-      <p class="note">Witness diagrams omit the optional annex. When at least two witness items are present and the last begins with <code>50</code>, Bitcoin removes that item before choosing the path. The annex is covered by the signature hash.</p>
-
-      <div class="equation-card">
-        <h3>From the wallet’s inputs to the address</h3>
-        <div class="equation">
-          <div><code>P = lift_x(internal_key)</code></div>
-          <div><code>t = int_be(H<sub>TapTweak</sub>(x(P) ‖ m))</code></div>
-          <div><code>Q = P + t · G</code></div>
-          <div><code>scriptPubKey = 51 ‖ 20 ‖ x(Q)</code></div>
-        </div>
-        <dl class="terms">
-          <div><dt>internal_key, P</dt><dd>The creator chooses a 32-byte x-only public key, for example the x coordinate of a wallet public key or a properly aggregated key. <code>lift_x</code> finds the secp256k1 point at that x coordinate with even y. The two possible y coordinates have opposite parity.</dd></div>
-          <div><dt>m, H<sub>tag</sub>, ‖</dt><dd><code>m</code> is the tree’s 32-byte Merkle root. With no tree it is the empty byte string. <code>H</code> is tagged SHA-256, defined below. The symbol <code>‖</code> joins byte strings end to end.</dd></div>
-          <div><dt>t, G, Q</dt><dd><code>int_be</code> reads the hash as an unsigned big-endian integer <code>t</code>. <code>G</code> is the fixed secp256k1 generator point. Scalar multiplication <code>t · G</code> and point addition move <code>P</code> to <code>Q</code>. Bitcoin rejects a tweak at least the curve order <code>n</code> or a result at infinity. The order is the number of multiples of <code>G</code> before the group cycles.</dd></div>
-          <div><dt>51, 20, x(Q)</dt><dd>Hex byte <code>51</code> is <code>OP_1</code>, the version marker. <code>20</code> pushes 32 bytes. <code>x(Q)</code> is those bytes, padded big-endian. The mainnet address uses <code>bc</code>, witness version 1, the program converted to 5-bit groups, and a Bech32m checksum.</dd></div>
-        </dl>
-        <details class="math-note">
-          <summary>How an x coordinate becomes a curve point</summary>
-          <div class="details-body">
-            <div class="equation compact">
-              <div><code>y² ≡ x³ + 7 (mod p), &nbsp; p = 2²⁵⁶ − 2³² − 977</code></div>
-              <div><code>y₀ = (x³ + 7)<sup>(p + 1)/4</sup> mod p</code></div>
-            </div>
-            <p><code>p</code> is the fixed field prime of secp256k1. Read the 32 public-key bytes as an integer <code>x</code>. First check <code>x &lt; p</code> and that the candidate <code>y₀</code> satisfies the curve equation. Then pick the even value from <code>y₀</code> and <code>−y₀ mod p</code>. This gives the internal point <code>P</code>. The tweaked point <code>Q</code> can have either parity, which is why the control block carries that bit.</p>
-          </div>
-        </details>
-      </div>
-    </section>
-
-    <section class="lesson-section" id="lab" aria-labelledby="lab-title">
-      <h2 id="lab-title">Build a script tree</h2>
-      <p class="intro">Each leaf is a complete alternative script. Change a leaf, then compare its hash, the root, and the address. Select a leaf to see which hashes a spender needs to reveal.</p>
-      <div class="lab-grid">
-        <form class="panel controls" id="builder">
-          <h3>Tree inputs</h3>
-          <label for="preset">Example</label>
-          <select id="preset">
-            <option value="toy">Toy · three tiny scripts</option>
-            <option value="single">Toy · single OP_1 leaf</option>
-            <option value="empty">Toy · key path only</option>
-            <option value="recovery">Wallet pattern · delayed recovery</option>
-            <option value="vector">BIP 341 · three signature leaves</option>
-          </select>
-          <p class="hint" id="preset-note"></p>
-          <label for="internal-key">Internal public key · x-only hex</label>
-          <input id="internal-key" class="hex" type="text" maxlength="128" spellcheck="false" autocomplete="off" autocapitalize="off">
-          <div id="grouping-field" hidden>
-            <label for="grouping">Tree shape · leaf nearest the root</label>
-            <select id="grouping">
-              <option value="0">A beside (B, C)</option>
-              <option value="1">B beside (A, C)</option>
-              <option value="2">C beside (A, B)</option>
-            </select>
-          </div>
-          <div id="leaf-fields"></div>
-          <button class="primary" type="submit">Recalculate tree</button>
-          <p id="build-status" class="status" role="status"></p>
-        </form>
-
-        <div class="panel tree-panel">
-          <h3>Merkle tree</h3>
-          <p class="hint" id="tree-hint">Select a leaf to trace its commitment.</p>
-          <div id="tree" aria-label="Script tree"></div>
-          <p class="legend"><span><i class="path-color"></i> Selected path</span><span><i class="sibling-color"></i> Sibling hash in proof</span></p>
-          <dl class="readouts" id="tree-values"></dl>
-          <button class="quiet" type="button" id="send-proof" disabled>Open selected proof in verifier</button>
-        </div>
-      </div>
-
-      <details class="math-note" open>
-        <summary>How the leaf and branch hashes are made</summary>
-        <div class="details-body">
-          <div class="equation compact">
-            <div><code>H<sub>tag</sub>(data) = SHA256(SHA256(tag) ‖ SHA256(tag) ‖ data)</code></div>
-            <div><code>L = H<sub>TapLeaf</sub>(v ‖ CompactSize(len(s)) ‖ s)</code></div>
-            <div><code>Branch(a, b) = H<sub>TapBranch</sub>(min(a, b) ‖ max(a, b))</code></div>
-          </div>
-          <p>The tags are ASCII strings Bitcoin defines to give each kind of hash its own domain. <code>v</code> is the leaf version byte, normally hex <code>c0</code> for Tapscript. <code>s</code> is the exact serialized script. Its size in bytes uses Bitcoin’s CompactSize integer encoding. For <code>OP_1</code>, the script is <code>51</code> and its length is <code>01</code>, so the hash input after the tag prefix is <code>c00151</code>.</p>
-          <p><code>a</code> and <code>b</code> are 32-byte child hashes. Compare them byte by byte, then put the smaller one first. Swapping siblings keeps the hash. Changing which children are paired can change the root. In the default tree, <code>m = Branch(Lₐ, Branch(Lᵦ, L𝒸))</code>, where <code>Lₐ</code>, <code>Lᵦ</code>, and <code>L𝒸</code> are the hashes of leaves A, B, and C. A single leaf is its own root.</p>
-          <p>In that default tree, a proof for B carries <code>L𝒸</code> first and <code>Lₐ</code> second. Start with B’s leaf hash, combine with C’s hash, then combine that result with A’s. Each step sorts its two inputs, so the proof never needs left or right indicators.</p>
-        </div>
-      </details>
-    </section>
-
-    <section class="lesson-section" id="verifier" aria-labelledby="verify-title">
-      <h2 id="verify-title" tabindex="-1">Verify one revealed script</h2>
-      <p class="intro">Take <code>x(Q)</code> from the <strong>previous output</strong> being spent, then take the script and control block from the spending input’s witness. The verifier checks their commitment against that previous output. Signatures, script execution, and transaction validity are outside this check.</p>
-      <div class="control-diagram" aria-label="Control block layout">
-        <div><strong>Header</strong><span>1 byte · leaf version and Q parity</span></div>
-        <div><strong>x(P)</strong><span>32 bytes · internal key</span></div>
-        <div><strong>h₁ ‖ … ‖ h<sub>d</sub></strong><span>32 bytes per sibling · nearest first</span></div>
-      </div>
-      <p class="note">The header’s low bit is <code>y(Q) mod 2</code>. Mask it off with <code>&amp; fe</code> to obtain the leaf version. The control block is <code>33 + 32d</code> bytes, where <code>d</code> is the number of siblings from the leaf to the root (0–128). A single leaf has a 33-byte control block.</p>
-      <div class="lab-grid verifier-grid">
-        <form id="proof-form" class="panel controls">
-          <h3>Proof inputs</h3>
-          <p id="proof-source" class="hint">Use the tree lab, load a mainnet example, or paste your own proof.</p>
-          <label for="expected-key">Expected <code>x(Q)</code> · 32-byte hex</label>
-          <input id="expected-key" class="hex" type="text" maxlength="128" spellcheck="false" autocomplete="off" autocapitalize="off">
-          <label for="revealed-script">Revealed script · hex</label>
-          <textarea id="revealed-script" rows="2" class="hex" maxlength="200000" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
-          <label for="control-block">Control block · hex</label>
-          <textarea id="control-block" rows="4" class="hex" maxlength="12500" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
-          <div class="actions">
-            <button class="primary" type="submit">Verify commitment</button>
-            <button class="quiet" type="button" id="flip-parity">Flip header parity</button>
-          </div>
-        </form>
-        <div class="panel proof-panel">
-          <h3>Verification trace</h3>
-          <p class="status" id="proof-status" role="status">Load an example to begin.</p>
-          <div id="proof-results"></div>
-        </div>
-      </div>
-      <p class="note">Try flipping header parity. The leaf version, hashes and reconstructed x coordinate stay the same, but the parity check fails. Then flip it back, change a byte of the script, and watch the x coordinate fail to match.</p>
-    </section>
-
-    <section class="lesson-section" id="mainnet" aria-labelledby="mainnet-title">
-      <h2 id="mainnet-title">Read real mainnet witnesses</h2>
-      <p class="intro">These spends were mined in block 709,635 in November 2021. Each example bundles the exact previous output and witness bytes locally.</p>
-      <div class="split">
-        <article class="panel example">
-          <h3>Signature leaf with a sibling</h3>
-          <p>Input 1 of <code>37777d…35c8</code> uses three witness items. The signature feeds the script, which pushes a 32-byte public key and ends with <code>OP_CHECKSIG</code>. The 65-byte control block supplies one sibling hash. Input 0 of the same transaction takes the key path with a single 64-byte signature.</p>
-          <div class="actions"><button type="button" class="primary chain-load" data-example="0">Load signature leaf</button><a href="https://blockstream.info/tx/37777defed8717c581b4c0509329550e344bdc14ac38f71fc050096887e535c8">View transaction</a></div>
-        </article>
-        <article class="panel example">
-          <h3>Single-leaf OP_1 spend</h3>
-          <p>Input 0 of <code>445f59…3cd6</code> has two witness items. <code>51</code> pushes true without any stack arguments. The 33-byte control block has no siblings, so the leaf hash is already the root. This public spending condition can be satisfied without a signature.</p>
-          <div class="actions"><button type="button" class="primary chain-load" data-example="1">Load OP_1 leaf</button><a href="https://blockstream.info/tx/445f592c71e364670ecf8d168eb651319d1fc17527df7addd35aa09555733cd6">View transaction</a></div>
-        </article>
-      </div>
-      <div class="panel vector-panel">
-        <div><h3>Check against the specification</h3><p>Compare all seven BIP 341 output vectors with the published hashes, keys, addresses, and control blocks.</p></div>
-        <button id="vector-check" class="quiet" type="button">Run BIP 341 vectors</button>
-        <p id="vector-status" class="status" role="status"></p>
-      </div>
-    </section>
-
-    <section class="lesson-section sources" id="sources" aria-labelledby="sources-title">
-      <h2 id="sources-title">Sources</h2>
-      <ul>
-        <li><a href="https://bips.dev/340/">BIP 340 · Schnorr signatures and x-only public keys</a></li>
-        <li><a href="https://bips.dev/341/">BIP 341 · Taproot output and spending rules</a></li>
-        <li><a href="https://bips.dev/342/">BIP 342 · Tapscript execution rules</a></li>
-        <li><a href="https://bips.dev/350/">BIP 350 · Bech32m address encoding</a></li>
-        <li><a href="https://bips.dev/68/">BIP 68 · Relative transaction lock time</a> and <a href="https://bips.dev/112/">BIP 112 · OP_CHECKSEQUENCEVERIFY</a></li>
-        <li><a href="https://github.com/bitcoin/bips/blob/master/bip-0341/wallet-test-vectors.json">BIP 341 · Wallet implementation vectors</a></li>
-      </ul>
-    </section>
-
-    <noscript><p class="note">JavaScript is required for the tree lab and proof verifier. The written lesson remains available.</p></noscript>
-  </main>
-
-  <footer class="shell footer"><a href="../">Back to Interactive Learning</a></footer>
+      <figcaption>Same output commitment, two ways to satisfy it.</figcaption>
+    </figure>
+  </section>
+  <section class="course-scenarios" aria-label="Examples used throughout">
+    <div>
+<h2>Alice’s wallet</h2>
+<p>Derive a single-key address and verify the signature that spends it.</p></div>
+    <div>
+<h2>Alice and Bob’s vault</h2>
+<p>Pay to one output with cooperative signing, delayed recovery, and an independent quorum.</p></div>
+    <div>
+<h2>Bitcoin mainnet</h2>
+<p>Read confirmed witnesses and recompute their transaction digests byte by byte.</p></div>
+  </section>
+  <section id="contents" class="contents">
+<h2>Contents</h2>
+    <p>Read in order for the full derivation, or jump to a chapter and use its worked exercises.</p>
+    <ol>
+<li><a href="./why.html"><span class="chapter-number">01</span><span><strong>Why Taproot exists</strong><span>Start with a familiar SegWit spend and a vault with a policy worth keeping private.</span></span></a>
+</li>
+<li><a href="./schnorr.html"><span class="chapter-number">02</span><span><strong>Schnorr and x-only keys</strong><span>Derive the verification equation, then inspect the parity conventions and an official signature.</span></span></a>
+</li>
+<li><a href="./keys.html"><span class="chapter-number">03</span><span><strong>From an internal key to an address</strong><span>Follow the public tweak and its matching private scalar all the way to bc1p.</span></span></a>
+</li>
+<li><a href="./signing.html"><span class="chapter-number">04</span><span><strong>Key-path spends and signature hashing</strong><span>Follow a node and a signer as they independently reconstruct the same transaction digest.</span></span></a>
+</li>
+<li><a href="./trees.html"><span class="chapter-number">05</span><span><strong>Script trees and control blocks</strong><span>Build a commitment, reveal one leaf, and reconstruct the output from the proof.</span></span></a>
+</li>
+<li><a href="./tapscript.html"><span class="chapter-number">06</span><span><strong>Executing Tapscript</strong><span>Walk through a timelock and a 2-of-3 recovery stack one opcode at a time.</span></span></a>
+</li>
+<li><a href="./cooperation.html"><span class="chapter-number">07</span><span><strong>Cooperative signing with MuSig2</strong><span>See how two signers jointly authorize the key path and when to use a script threshold instead.</span></span></a>
+</li>
+<li><a href="./wallets.html"><span class="chapter-number">08</span><span><strong>BIP86 and wallet recovery</strong><span>Derive the receiving address from an account xpub and identify what a vault backup must retain.</span></span></a>
+</li>
+<li><a href="./transactions.html"><span class="chapter-number">09</span><span><strong>Reading confirmed transactions</strong><span>Verify real Taproot signatures and compare actual P2WPKH, P2WSH, and P2TR witnesses.</span></span></a>
+</li>
+<li><a href="./implementation.html"><span class="chapter-number">10</span><span><strong>Go, PSBT, and hardware signing</strong><span>Run a complete software example and trace the data passed to a separate signer.</span></span></a>
+</li>
+<li><a href="./vault.html"><span class="chapter-number">11</span><span><strong>Capstone: Build and spend the vault</strong><span>Construct both paths, validate their witnesses, and explain exactly what each spend reveals.</span></span></a>
+</li>
+<li><a href="./reference.html"><span class="chapter-number">12</span><span><strong>Glossary and worked reference</strong><span>Look up symbols, transaction fields, common misconceptions, and primary sources.</span></span></a>
+</li>
+</ol>
+  </section>
+</main>
+  <footer class="bookfooter book-shell"><a href="./">Taproot field guide</a><a href="./reference.html#sources">Sources</a><a href="../">Learning index</a>
+</footer>
 </body>
 </html>

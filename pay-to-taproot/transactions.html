@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Reading confirmed transactions · Bitcoin Taproot</title>
+  <link rel="stylesheet" href="./lesson.css">
+  <link rel="stylesheet" href="./book.css">
+  <script type="module" src="./experiments.mjs"></script>
+</head>
+<body class="book">
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="bookbar"><div class="book-shell">
+    <a class="wordmark" href="./"><span aria-hidden="true">₿</span> Taproot field guide</a>
+    <nav aria-label="Site"><a href="./#contents">Contents</a><a href="./reference.html">Reference</a><a href="../">Learning index</a>
+</nav>
+  </div>
+</header>
+  <main id="main" class="book-shell chapter-layout">
+  <aside class="course-nav">
+<details>
+<summary>Chapters</summary>
+<nav aria-label="Chapters"><a  href="./why.html"><span>01</span>Why Taproot exists</a><a  href="./schnorr.html"><span>02</span>Schnorr and x-only keys</a><a  href="./keys.html"><span>03</span>From an internal key to an address</a><a  href="./signing.html"><span>04</span>Key-path spends and signature hashing</a><a  href="./trees.html"><span>05</span>Script trees and control blocks</a><a  href="./tapscript.html"><span>06</span>Executing Tapscript</a><a  href="./cooperation.html"><span>07</span>Cooperative signing with MuSig2</a><a  href="./wallets.html"><span>08</span>BIP86 and wallet recovery</a><a aria-current=page href="./transactions.html"><span>09</span>Reading confirmed transactions</a><a  href="./implementation.html"><span>10</span>Go, PSBT, and hardware signing</a><a  href="./vault.html"><span>11</span>Capstone: Build and spend the vault</a><a  href="./reference.html"><span>12</span>Glossary and worked reference</a>
+</nav>
+</details>
+<nav class="wide-nav" aria-label="Chapters"><a  href="./why.html"><span>01</span>Why Taproot exists</a><a  href="./schnorr.html"><span>02</span>Schnorr and x-only keys</a><a  href="./keys.html"><span>03</span>From an internal key to an address</a><a  href="./signing.html"><span>04</span>Key-path spends and signature hashing</a><a  href="./trees.html"><span>05</span>Script trees and control blocks</a><a  href="./tapscript.html"><span>06</span>Executing Tapscript</a><a  href="./cooperation.html"><span>07</span>Cooperative signing with MuSig2</a><a  href="./wallets.html"><span>08</span>BIP86 and wallet recovery</a><a aria-current=page href="./transactions.html"><span>09</span>Reading confirmed transactions</a><a  href="./implementation.html"><span>10</span>Go, PSBT, and hardware signing</a><a  href="./vault.html"><span>11</span>Capstone: Build and spend the vault</a><a  href="./reference.html"><span>12</span>Glossary and worked reference</a>
+</nav>
+</aside>
+  <article class="chapter">
+  <header class="chapter-head">
+<p class="overline">Part 9</p>
+<h1>Reading confirmed transactions</h1>
+  <p class="lede">Verify real Taproot signatures and compare actual P2WPKH, P2WSH, and P2TR witnesses.</p>
+</header>
+  <nav class="local-nav" aria-label="On this page"><a href="#key-observed">A confirmed key-path payment</a><a href="#script-observed">A confirmed script-path spend with a one-level proof</a><a href="#comparison">Compare actual witness shapes</a><a href="#exercises">Check your understanding</a>
+</nav>
+  <h2 id="key-observed">A confirmed key-path payment</h2>
+<p>Start at input 0 of <a href="https://blockstream.info/tx/33e794d097969002ee05d336686fc03c9e15a597c1b9827669460fac98799036">33e794d097969002ee05d336686fc03c9e15a597c1b9827669460fac98799036</a> in block 709,635. It spends 88,480 sat from output 1 of <a href="https://blockstream.info/tx/5849051cf3ce36257a1d844e28959f368a35adc9520fb9679175f6cdf8c1f1d1">5849051c…f1d1</a>. This transaction pays 67,230 sat to another P2TR output and has a zero-value OP_RETURN output with a message. The input-output difference is 21,250 sat.</p>
+<pre class="equation"><code>Previous scriptPubKey
+51 20 339ce7e165e67d93adb3fef88a6d4beed33f01fa876f05a225242b82a631abc0
+scriptSig: empty
+Witness stack: [64-byte signature]
+Sighash: DEFAULT (no appended byte)</code>
+</pre>
+<p>The witness contains one item, no annex, so the node uses the key path and verifies against the previous output’s x coordinate. You can learn which key the signature verifies under and which transaction fields it commits to. You cannot recover the internal key, signer count, or whether there were any fallback scripts from this witness alone.</p>
+<h2 id="script-observed">A confirmed script-path spend with a one-level proof</h2>
+<p>In the same block, <a href="https://blockstream.info/tx/37777defed8717c581b4c0509329550e344bdc14ac38f71fc050096887e535c8">37777defed8717c581b4c0509329550e344bdc14ac38f71fc050096887e535c8</a> spends two 491,750-sat outputs from one <a href="https://blockstream.info/tx/e700b7b330e4b56c5883d760f9cbe4fa47e0f62b350e108f1767bc07a4bbc07b">funding transaction</a>. It creates a single 965,300-sat P2WPKH output. Input 0 uses the key path. Input 1 uses a 64-byte signature as a stack argument, a 34-byte Tapscript, and a 65-byte control block.</p>
+<pre class="equation"><code>Script: 20 &lt;32-byte x-only public key&gt; ac
+Control: c0 | &lt;32-byte internal key&gt; | &lt;32-byte sibling&gt;
+TapLeaf data: c0 22 20 &lt;32-byte x-only public key&gt; ac</code>
+</pre>
+<p><code>20</code> pushes the script’s public key, which may differ from the internal and output keys. <code>ac</code> checks the supplied signature under that leaf key. This leaf authorizes one signature with no timelock or threshold. The control block supplies just one sibling and the value c0 indicates even Q. The experiment reconstructs the root and Q, then uses the script extension to build the digest and check the signature.</p>
+<section class="workbench" id="chain-lab" aria-labelledby="chain-lab-title">
+<h3 id="chain-lab-title">Dissect and verify the mainnet inputs</h3><label>Observed spend<select name="tx"><option value="key">Confirmed key-path input 0</option><option value="script">Confirmed script-path input 1</option></select></label>
+<p>Expand the wire transaction and control block, then open the <a href="./signing.html#sighash-lab">signing-message explorer</a> to see every digest field and subhash preimage.</p><div class="experiment-result" data-result aria-live="polite"></div>
+</section>
+<h2 id="comparison">Compare actual witness shapes</h2><div class="table-scroll" tabindex="0" role="region" aria-label="Observed input comparison table">
+<table>
+<thead>
+<tr><th scope="col">Observed input</th><th scope="col">Previous locking bytes</th><th scope="col">Disclosed evidence</th><th scope="col">Digest and size</th>
+</tr>
+</thead>
+<tbody>
+<tr><th scope=row><a href="https://blockstream.info/tx/8533bc90b80727223087ee34b8074f3ef58213fafbbfd3d1836b0a08da96c01b">P2WPKH</a></th><td><code>0014f60834ef165253c571b11ce9fa74e46692fc5ec1</code></td><td>71-byte DER ECDSA/type item and compressed 33-byte key.</td><td>BIP143. Input witness 107 bytes. Transaction 565 WU / 142 vB (1 in, 2 out).</td>
+</tr>
+<tr><th scope=row><a href="https://blockstream.info/tx/7df2fc6d74c62399abc2be0ffdd29f7fafe5e942e6afff4f599ae7f9509839ea">P2WSH</a></th><td><code>0020701a8d401c84fb13e6baf169d59684e17abd9fa216c8cc5b9fc63d622ff8c58d</code></td><td>Dummy, two DER ECDSA/type items, and 105-byte script disclosing three compressed keys.</td><td>BIP143. Input witness 252 bytes. Transaction 890 WU / 223 vB (1 in, 3 out).</td>
+</tr>
+<tr><th scope=row>P2TR key path</th><td><code>5120339ce7e165e67d93adb3fef88a6d4beed33f01fa876f05a225242b82a631abc0</code></td><td>64-byte BIP340 signature.</td><td>BIP341. Input witness 66 bytes. Transaction 676 WU / 169 vB (1 in, 2 out).</td>
+</tr>
+<tr><th scope=row>P2TR script path</th><td><code>51205f4237bd7f93c69403a30c6b641f27ccf5201090152fcf1596474221307831c3</code></td><td>64-byte BIP340 signature, one CHECKSIG leaf key, plus control with internal key and sibling hash.</td><td>BIP341/BIP342. Selected input witness 167 bytes. Transaction 727 WU / 182 vB (2 in, 1 out).</td>
+</tr>
+</tbody>
+</table></div>
+<details>
+<summary>Decode the disclosed public keys and signature format</summary>
+<p>The P2WPKH witness gives this compressed public key as its second item. Version 0 validates HASH160 of those 33 bytes against the previous 20-byte program.</p>
+<pre class="equation"><code>026e5628506ecd33242e5ceb5fdafe4d3066b5c0f159b3c05a621ef65f177ea286</code>
+</pre>
+<p>The first item ends with the sighash byte <code>01</code>. Its earlier bytes are an ECDSA DER sequence: <code>30 44</code> wraps two INTEGERs, each <code>02 20</code> followed by 32 bytes. The BIP340 item uses two fixed-width words and omits the type byte for DEFAULT.</p>
+<pre class="equation"><code>30 44 | 02 20 61d19e0b6dacfc418e1eb105b857b89c150ad77aa9d5ca3e2bd5e72893d6267e | 02 20 2cdc9f8db8d0891d859e55f8e7b67a9a323f95bdc3342467fdf0e5e626ddc366 | 01</code>
+</pre>
+<p>The P2WSH witness script is <code>52</code> (threshold 2), then three <code>21</code> pushes of 33-byte keys, then <code>53 ae</code> (three keys, CHECKMULTISIG). The three public keys are:</p>
+<pre class="equation"><code>0375e00eb72e29da82b89367947f29ef34afb75e8654f6ea368e0acdfd92976b7c
+03a1b26313f430c4b15bb1fdce663207659d8cac749a0e53d70eff01874496feff
+03c96d495bfdd5ba4145e3e046fee45e84a8a48ad05bd8dbb395c011a32cf9f880</code>
+</pre>
+</details>
+<p>Input witness sizes include item counts and lengths. Overall transaction sizes also depend on every other input, output and script. The P2TR key-path transaction here has a smaller input witness than the P2WPKH transaction, yet a larger total size. In the controlled vault comparison, base transaction shapes match. The exact fee still depends on feerate.</p>
+<p>Independent reproduction starts with the block and raw transaction bytes, available through your node or an explorer. The browser reconstructs serialized transactions from bundled records and verifies their Taproot signatures. For a historical lookup in Bitcoin Core, provide a block hash to <code>getrawtransaction</code> or use a transaction index. An independently downloaded previous transaction lets you extract the exact satoshi amounts and scripts yourself.</p>
+<h2 id="exercises">Check your understanding</h2><div class="exercise">
+<p><strong>Level 1 · Can the native type of the input be inferred from the spending outputs?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>Which transaction supplied the locking script?</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>Take the input’s outpoint and read that previous output. The destination output can have a wholly different type.</p>
+</details></div><div class="exercise">
+<p><strong>Level 2 · What would the signing program have to change if a trailing annex were appended?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>Check spend_type and the annex subhash.</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>It adds 1 to spend_type and inserts SHA256(CompactSize(length)||annex). The old signature would not verify against the changed digest.</p>
+</details></div><div class="exercise">
+<p><strong>Level 3 · Locate the signature check for input 1 of 37777d…35c8. What key is it under?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>Read the 32 bytes immediately after script opcode 20.</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>It verifies against f5b059b9a72298ccbefff59d9b943f7e0fc91d8a3b944a95e7b6390cc99eb5f4, the leaf’s key. The funding program and control parity are verified in a separate commitment check.</p>
+</details></div>
+<p><span class="source-label">Specifications</span> <a href="https://bips.dev/141/">BIP 141</a> · <a href="https://bips.dev/143/">BIP 143</a> · <a href="https://bips.dev/340/">BIP 340</a> · <a href="https://bips.dev/341/">BIP 341</a> · <a href="https://bips.dev/342/">BIP 342</a>
+</p>
+  <nav class="page-turn" aria-label="Continue reading"><a href="./wallets.html"><small>Previous</small>BIP86 and wallet recovery</a><a href="./implementation.html"><small>Next</small>Go, PSBT, and hardware signing</a>
+</nav>
+  </article>
+</main>
+  <footer class="bookfooter book-shell"><a href="./">Taproot field guide</a><a href="./reference.html#sources">Sources</a><a href="../">Learning index</a>
+</footer>
+</body>
+</html>

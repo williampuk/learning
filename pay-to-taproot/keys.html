@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>From an internal key to an address · Bitcoin Taproot</title>
+  <link rel="stylesheet" href="./lesson.css">
+  <link rel="stylesheet" href="./book.css">
+  <script type="module" src="./experiments.mjs"></script>
+</head>
+<body class="book">
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="bookbar"><div class="book-shell">
+    <a class="wordmark" href="./"><span aria-hidden="true">₿</span> Taproot field guide</a>
+    <nav aria-label="Site"><a href="./#contents">Contents</a><a href="./reference.html">Reference</a><a href="../">Learning index</a>
+</nav>
+  </div>
+</header>
+  <main id="main" class="book-shell chapter-layout">
+  <aside class="course-nav">
+<details>
+<summary>Chapters</summary>
+<nav aria-label="Chapters"><a  href="./why.html"><span>01</span>Why Taproot exists</a><a  href="./schnorr.html"><span>02</span>Schnorr and x-only keys</a><a aria-current=page href="./keys.html"><span>03</span>From an internal key to an address</a><a  href="./signing.html"><span>04</span>Key-path spends and signature hashing</a><a  href="./trees.html"><span>05</span>Script trees and control blocks</a><a  href="./tapscript.html"><span>06</span>Executing Tapscript</a><a  href="./cooperation.html"><span>07</span>Cooperative signing with MuSig2</a><a  href="./wallets.html"><span>08</span>BIP86 and wallet recovery</a><a  href="./transactions.html"><span>09</span>Reading confirmed transactions</a><a  href="./implementation.html"><span>10</span>Go, PSBT, and hardware signing</a><a  href="./vault.html"><span>11</span>Capstone: Build and spend the vault</a><a  href="./reference.html"><span>12</span>Glossary and worked reference</a>
+</nav>
+</details>
+<nav class="wide-nav" aria-label="Chapters"><a  href="./why.html"><span>01</span>Why Taproot exists</a><a  href="./schnorr.html"><span>02</span>Schnorr and x-only keys</a><a aria-current=page href="./keys.html"><span>03</span>From an internal key to an address</a><a  href="./signing.html"><span>04</span>Key-path spends and signature hashing</a><a  href="./trees.html"><span>05</span>Script trees and control blocks</a><a  href="./tapscript.html"><span>06</span>Executing Tapscript</a><a  href="./cooperation.html"><span>07</span>Cooperative signing with MuSig2</a><a  href="./wallets.html"><span>08</span>BIP86 and wallet recovery</a><a  href="./transactions.html"><span>09</span>Reading confirmed transactions</a><a  href="./implementation.html"><span>10</span>Go, PSBT, and hardware signing</a><a  href="./vault.html"><span>11</span>Capstone: Build and spend the vault</a><a  href="./reference.html"><span>12</span>Glossary and worked reference</a>
+</nav>
+</aside>
+  <article class="chapter">
+  <header class="chapter-head">
+<p class="overline">Part 3</p>
+<h1>From an internal key to an address</h1>
+  <p class="lede">Follow the public tweak and its matching private scalar all the way to bc1p.</p>
+</header>
+  <nav class="local-nav" aria-label="On this page"><a href="#motivation">Why publish Q instead of P?</a><a href="#tweak">The bytes that bind the output</a><a href="#private">Signing for the tweaked output</a><a href="#address">From scriptPubKey to bc1p</a><a href="#exercises">Check your understanding</a>
+</nav>
+  <h2 id="motivation">Why publish Q instead of P?</h2>
+<p>Suppose Alice funds an output using just the public key she already has. Anyone who knows the key can verify an ordinary signature. But the same 32 bytes would be used whether Alice intended a recovery rule or a completely different one. A node would have no way to tell which rule, if any, was authorized by the funding output.</p>
+<p>Taproot needs a key that still behaves like a key when checking a signature, but can also encode a commitment. Start with Alice’s even-Y internal point P. Compute a public offset from the key and the optional script root. Add that offset as a point. The result Q still has a corresponding private scalar. An outside observer who knows the ingredients can repeat the public calculation.</p>
+<ol class="flow" aria-label="Process diagram">
+<li><strong>Internal P</strong><span>Lift its 32-byte X to the even-Y point.</span>
+</li>
+<li><strong>Public offset t</strong><span>Hash x(P) and any script root under TapTweak.</span>
+</li>
+<li><strong>Point tG</strong><span>Move by t multiples of the generator.</span>
+</li>
+<li><strong>Output Q</strong><span>Add P + tG and encode only x(Q).</span>
+</li>
+</ol>
+<p>On the toy curve from Part 2, take normalized d=17 and imagine the hash provided t=5. The public result is <code>17G + 5G = 22G = 3G = (10,6)</code>, since the group order is 19. The corresponding scalar is <code>(17 + 5) mod 19 = 3</code>. Here t=5 is an input to illustrate the addition. The live Bitcoin example computes t with real SHA-256.</p>
+<h2 id="tweak">The bytes that bind the output</h2>
+<pre class="equation"><code>X = x(P)               when no script tree is provided
+X = x(P) || m          when a script tree is provided
+t = int(H_TapTweak(X))
+Q = P + tG</code>
+</pre>
+<p>The internal x coordinate is a public 32-byte big-endian serialization. The root <code>m</code> is a 32-byte public-when-disclosed hash from Part 5. It is omitted entirely in the single-key case. A 32-byte all-zero root is different from an omitted root. The tweak hash is interpreted as an unsigned big-endian scalar. BIP341 rejects <code>t ≥ n</code> rather than reducing it, and rejects the point at infinity. The point addition uses field arithmetic modulo p.</p>
+<p>Put the internal key into the hash as well as the root. This binds the offset to both inputs. A different tree typically produces a different root, tweak, and output point. The valid public relation requires knowing no secret. To prove membership later, a script-path spender reveals enough information to recreate these inputs.</p>
+<section class="workbench" id="tweak-lab" aria-labelledby="tweak-lab-title">
+<h3 id="tweak-lab-title">Experiment D · Change one byte of the commitment</h3><label>Optional 32-byte root (64 hex characters, or leave empty)<input name="root" value="" maxlength="64" spellcheck="false" placeholder="Empty root reproduces BIP341 vector 0"></label>
+<p>Try 64 zeroes, then change the last digit to 1.</p><button type="button" data-run>Compute output</button><div class="experiment-result" data-result aria-live="polite"></div>
+</section>
+<h2 id="private">Signing for the tweaked output</h2>
+<p>Alice owns a raw key d₀. First normalize it to d, matching the even internal point P. Add t in the scalar group. Because multiplying by G distributes over this addition, the preliminary scalar u yields the exact full output point Q. Now inspect Q’s Y. The signer normalizes again because the verifier lifts x(Q) to even Y, which may be −Q.</p>
+<pre class="equation"><code>d = d₀ if y(d₀G) is even, else n − d₀
+u = (d + t) mod n    reject u = 0
+uG = dG + tG = P + tG = Q
+q = u if y(Q) is even, else n − u
+qG = lift_x(x(Q))</code>
+</pre>
+<p>Only d₀, d, u, and q are private here. The original d₀ yields the internal key and its signatures bind the challenge to x(P). A key-path spend binds it to x(Q), so an original-key signature generally fails. The output parity used in a control block comes from unnormalized Q, while the signing scalar q corresponds to the even lift of x(Q).</p>
+<section class="workbench" id="private-tweak-lab" aria-labelledby="private-tweak-lab-title">
+<h3 id="private-tweak-lab-title">Worked example · Check the public and private calculations agree</h3><label>Public demonstration scalar d₀<input name="secret" value="6" type="number" min="1" max="20"></label><div class="experiment-result" data-result aria-live="polite"></div>
+</section>
+<h2 id="address">From scriptPubKey to bc1p</h2><div class="pair"><div class="plate">
+<h3>P2WPKH</h3>
+<pre class="equation"><code>00 | 14 | 20-byte HASH160(pubkey)</code>
+</pre>
+<p>Version 0, Bech32. The program is a hash.</p></div><div class="plate">
+<h3>P2TR</h3>
+<pre class="equation"><code>51 | 20 | 32-byte x(Q)</code>
+</pre>
+<p>Version 1, Bech32m. The program is an encoded curve coordinate.</p></div></div>
+<p>An address is for transport. Given the version and witness program, a wallet makes the two opcodes and the program bytes above. Bech32m encodes the same 32 bytes as 52 groups of five bits, with four zero padding bits at the end. The HRP is <code>bc</code> on mainnet and <code>tb</code> on testnet, followed by separator <code>1</code>. The first data word is 1, encoded as <code>p</code>. Six more characters encode the checksum. Bech32m uses the constant <code>0x2bc830a3</code> in place of Bech32’s 1 to address an insertion weakness in the original checksum. Version 0 still uses Bech32.</p>
+<details>
+<summary>How the address checksum is computed</summary>
+<p>Expand the HRP by putting the high five-bit groups of its ASCII letters first, then a zero, then their low five-bit groups. Append the data words and six zero placeholders. Run the Bech32 polymod recurrence below, XOR the result with the Bech32m constant, and encode the resulting 30 bits as six checksum words. On decoding, polymod over the HRP expansion and all words including the checksum equals the Bech32m constant.</p>
+<pre class="equation"><code>alphabet = qpzry9x8gf2tvdw0s3jn54khce6mua7l
+chk = 1
+for each expanded HRP, data, or placeholder word v:
+    top = chk &gt;&gt; 25
+    chk = ((chk &amp; 0x1ffffff) &lt;&lt; 5) XOR v
+    for each i from 0 through 4 with bit i set in top:
+        chk = chk XOR generator[i]
+generator = [3b6a57b2, 26508e6d, 1ea119fa, 3d4233dd, 2a1462b3]
+checksum integer = chk XOR 0x2bc830a3</code>
+</pre>
+</details>
+<p>The <a href="./wallets.html#bip86-lab">BIP86 decoding experiment</a> breaks a published address into those fields and regroups the bits into exactly 32 program bytes.</p>
+<h2 id="exercises">Check your understanding</h2><div class="exercise">
+<p><strong>Level 1 · Why can a watch-only coordinator calculate Q?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>List the inputs to TapTweak and the point addition.</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>It needs x(P), the optional root, and public group operations. The private scalar never enters that derivation.</p>
+</details></div><div class="exercise">
+<p><strong>Level 2 · In the toy curve, set d=17 and t=4. Which scalar actually signs?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>2G = (6,3).</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>u=2 mod 19, Q has odd Y, so q=17 and qG=(6,14). Both points have x=6.</p>
+</details></div><div class="exercise">
+<p><strong>Level 3 · Load the official output vector and compare the 64-zero-character root. Why do the results differ?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>Count the TapTweak data bytes.</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>Omission means x(P) is the entire 32-byte data. An all-zero root appends 32 bytes and changes the hash and output.</p>
+</details></div>
+<p><span class="source-label">Specifications</span> <a href="https://bips.dev/340/">BIP 340</a> · <a href="https://bips.dev/341/">BIP 341</a> · <a href="https://bips.dev/350/">BIP 350</a> · <a href="https://bips.dev/86/">BIP 86</a>
+</p>
+  <nav class="page-turn" aria-label="Continue reading"><a href="./schnorr.html"><small>Previous</small>Schnorr and x-only keys</a><a href="./signing.html"><small>Next</small>Key-path spends and signature hashing</a>
+</nav>
+  </article>
+</main>
+  <footer class="bookfooter book-shell"><a href="./">Taproot field guide</a><a href="./reference.html#sources">Sources</a><a href="../">Learning index</a>
+</footer>
+</body>
+</html>

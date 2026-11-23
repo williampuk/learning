@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Go, PSBT, and hardware signing · Bitcoin Taproot</title>
+  <link rel="stylesheet" href="./lesson.css">
+  <link rel="stylesheet" href="./book.css">
+  <script type="module" src="./experiments.mjs"></script>
+</head>
+<body class="book">
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="bookbar"><div class="book-shell">
+    <a class="wordmark" href="./"><span aria-hidden="true">₿</span> Taproot field guide</a>
+    <nav aria-label="Site"><a href="./#contents">Contents</a><a href="./reference.html">Reference</a><a href="../">Learning index</a>
+</nav>
+  </div>
+</header>
+  <main id="main" class="book-shell chapter-layout">
+  <aside class="course-nav">
+<details>
+<summary>Chapters</summary>
+<nav aria-label="Chapters"><a  href="./why.html"><span>01</span>Why Taproot exists</a><a  href="./schnorr.html"><span>02</span>Schnorr and x-only keys</a><a  href="./keys.html"><span>03</span>From an internal key to an address</a><a  href="./signing.html"><span>04</span>Key-path spends and signature hashing</a><a  href="./trees.html"><span>05</span>Script trees and control blocks</a><a  href="./tapscript.html"><span>06</span>Executing Tapscript</a><a  href="./cooperation.html"><span>07</span>Cooperative signing with MuSig2</a><a  href="./wallets.html"><span>08</span>BIP86 and wallet recovery</a><a  href="./transactions.html"><span>09</span>Reading confirmed transactions</a><a aria-current=page href="./implementation.html"><span>10</span>Go, PSBT, and hardware signing</a><a  href="./vault.html"><span>11</span>Capstone: Build and spend the vault</a><a  href="./reference.html"><span>12</span>Glossary and worked reference</a>
+</nav>
+</details>
+<nav class="wide-nav" aria-label="Chapters"><a  href="./why.html"><span>01</span>Why Taproot exists</a><a  href="./schnorr.html"><span>02</span>Schnorr and x-only keys</a><a  href="./keys.html"><span>03</span>From an internal key to an address</a><a  href="./signing.html"><span>04</span>Key-path spends and signature hashing</a><a  href="./trees.html"><span>05</span>Script trees and control blocks</a><a  href="./tapscript.html"><span>06</span>Executing Tapscript</a><a  href="./cooperation.html"><span>07</span>Cooperative signing with MuSig2</a><a  href="./wallets.html"><span>08</span>BIP86 and wallet recovery</a><a  href="./transactions.html"><span>09</span>Reading confirmed transactions</a><a aria-current=page href="./implementation.html"><span>10</span>Go, PSBT, and hardware signing</a><a  href="./vault.html"><span>11</span>Capstone: Build and spend the vault</a><a  href="./reference.html"><span>12</span>Glossary and worked reference</a>
+</nav>
+</aside>
+  <article class="chapter">
+  <header class="chapter-head">
+<p class="overline">Part 10</p>
+<h1>Go, PSBT, and hardware signing</h1>
+  <p class="lede">Run a complete software example and trace the data passed to a separate signer.</p>
+</header>
+  <nav class="local-nav" aria-label="On this page"><a href="#go-key">Go: Sign Alice’s key path and verify it locally</a><a href="#go-script">Go: Build a tree and sign the recovery leaf</a><a href="#psbt">Move transaction context across a signing boundary</a><a href="#hsm">An HSM needs the signature scheme and the correct key</a><a href="#exercises">Check your understanding</a>
+</nav>
+  <h2 id="go-key">Go: Sign Alice’s key path and verify it locally</h2>
+<p>A software wallet assembles a transaction, retrieves its prevouts, signs the digest, and builds the witness. Splitting these jobs exposes which library function performs which part of the protocol. The bundled Go module uses pinned btcd and btcec packages. Its keys and fake funding transactions are public test artifacts.</p>
+<pre class="equation"><code>cd pay-to-taproot/go
+go run .</code>
+</pre>
+<p>The program prints the signed wire transactions, outpoints, witnesses, hashes and sizes. It verifies each input with btcd’s script engine and checks the standalone key-path Schnorr signature. <a href="./go/main.go" download>Download main.go</a>, <a href="./go/go.mod" download>go.mod</a>, and <a href="./go/go.sum" download>go.sum</a>. Put the three files in one directory when running the downloads.</p>
+<ol>
+<li>Import scalar 3 with btcec and derive its public point. schnorr.SerializePubKey returns x(P).</li>
+<li>ComputeTaprootKeyNoScript lifts the key and adds TapTweak(x(P))·G. PayToTaprootScript emits 51 20 x(Q).</li>
+<li>The example constructs a synthetic funding transaction, then spends one 100,000-sat output into a 99,000-sat output. MultiPrevOutFetcher supplies the amount and script for hashing.</li>
+<li>CalcTaprootSignatureHash constructs the DEFAULT digest. TweakTaprootPrivKey handles internal parity and adds t. schnorr.Sign handles final BIP340 parity. The helper uses crypto/rand and schnorr.CustomNonce to choose the auxiliary-randomness nonce path.</li>
+<li>Place the 64-byte signature in the witness. Check the signature and run txscript.NewEngine with StandardVerifyFlags against the old output.</li>
+</ol>
+<pre class="equation"><code>alice := demoKey(3)
+	// BIP86-style commitment: hash x(P) alone and add tG.
+	output := txscript.ComputeTaprootKeyNoScript(alice.PubKey())
+	script := must(txscript.PayToTaprootScript(output))
+	s := newSpend(1, script, wire.MaxTxInSequenceNum)
+	digest := s.digest()
+	tweaked := txscript.TweakTaprootPrivKey(*alice, nil)
+	sig := sign(tweaked, digest)
+	if !sig.Verify(digest, output) {
+		panic(&quot;key-path signature failed independent Schnorr verification&quot;)
+	}
+	s.tx.TxIn[0].Witness = wire.TxWitness{sig.Serialize()}
+	require(s.validate())
+	result := s.report(digest)
+	result[&quot;internalKey&quot;] = h(publicKey(alice))
+	result[&quot;outputKey&quot;] = h(schnorr.SerializePubKey(output))
+	result[&quot;scriptPubKey&quot;] = h(script)
+	result[&quot;regtestAddress&quot;] = must(btcutil.NewAddressTaproot(schnorr.SerializePubKey(output),
+		&amp;chaincfg.RegressionNetParams)).EncodeAddress()
+	return result
+}</code>
+</pre>
+<p>The local engine checks the script and signatures. Bitcoin Core regtest also supplies chain and mempool context. Open the reproduction below to test the same policy before and after the relative lock matures.</p>
+<details>
+<summary>Reproduce the Bitcoin Core regtest check</summary>
+<p>Start an isolated regtest node with wallet support. Create a wallet, get a mining address, and generate 101 blocks so coinbase funds are mature. The Go JSON prints a <code>regtestAddress</code> for the wallet and the vault.</p>
+<pre class="equation"><code>bitcoin-cli -regtest createwallet taproot-learning
+bitcoin-cli -regtest -rpcwallet=taproot-learning getnewaddress
+bitcoin-cli -regtest generatetoaddress 101 MINING_ADDRESS
+bitcoin-cli -regtest -rpcwallet=taproot-learning -named sendtoaddress address=POLICY_ADDRESS amount=0.001 fee_rate=2</code>
+</pre>
+<p>Fund each example independently with 0.001 BTC. Use the wallet’s gettransaction and decoderawtransaction to find the output index whose script matches the Go report. Confirm the deposits by mining one block. Create funding.json with the mapping below, using your real regtest TXIDs and output indexes. Example 1 uses the single-key address. Examples 2 through 5 use the vault address.</p>
+<pre class="equation"><code>{
+  &quot;1&quot;: {&quot;txid&quot;: &quot;SINGLE_KEY_FUNDING_TXID&quot;, &quot;vout&quot;: 0, &quot;value&quot;: 100000},
+  &quot;2&quot;: {&quot;txid&quot;: &quot;COOPERATIVE_FUNDING_TXID&quot;, &quot;vout&quot;: 0, &quot;value&quot;: 100000},
+  &quot;3&quot;: {&quot;txid&quot;: &quot;RECOVERY_FUNDING_TXID&quot;, &quot;vout&quot;: 0, &quot;value&quot;: 100000}
+}
+go run . -funding funding.json &gt; report.json
+bitcoin-cli -regtest testmempoolaccept &#x27;[&quot;RAW_FROM_REPORT&quot;]&#x27;</code>
+</pre>
+<p>Test report.singleKey.raw, report.vault.cooperative.raw and report.vault.recovery.raw independently, without broadcasting. Core accepts the first two. Recovery returns <code>non-BIP68-final</code> just after confirmation. Mine 143 more blocks, then rerun the test for the same recovery hex. The next candidate block satisfies sequence 144. To check the quorum run, also provide example 4 and wait for sequence 4,320. A live regtest funding map is optional, and each omitted example keeps its synthetic prevout. Generated signatures can vary due to fresh nonce randomness.</p>
+</details>
+<h2 id="go-script">Go: Build a tree and sign the recovery leaf</h2>
+<p>The vault uses NewScriptBuilder for each rule, including minimal script-number bytes. NewBaseTapLeaf chooses c0. The library hashes that version, script length, and script. NewTapBranch sorts its two child hashes for each hash calculation. The tree shape is explicitly A beside (B,C). A control block for A therefore contains the internal key and a single proof hash for B+C. We deliberately reconstruct and check the commitment before constructing the signed witness.</p>
+<pre class="equation"><code>a := txscript.NewBaseTapLeaf(delayed)
+b := txscript.NewBaseTapLeaf(quorum)
+c := txscript.NewBaseTapLeaf(emergency)
+branch := txscript.NewTapBranch(b, c)
+root := txscript.NewTapBranch(a, branch).TapHash()
+output := txscript.ComputeTaprootOutputKey(internal, root[:])
+// Build/serialize the control with internal key, output parity, c0, and branch hash.
+// Independently verify it against x(Q) and the revealed script.
+digest := s.scriptDigest(a) // CalcTapscriptSignaturehash adds the BIP342 extension.
+sig := sign(recovery, digest) // Fresh auxiliary randomness, then BIP340.
+s.tx.TxIn[0].Witness = wire.TxWitness{sig.Serialize(), delayed, controlBytes}</code>
+</pre>
+<p>The script signature uses Alice’s dedicated recovery scalar directly with BIP340 normalization. Its key in the script is x(AliceRecovery), so adding the output tweak to that secret would sign for the wrong key. Run the program to see the key path, the delayed path, the CHECKSIGADD quorum path, and an absolute locktime path. For comparison it also correctly signs an input with sequence 143 and records the script engine’s CSV rejection.</p>
+<h2 id="psbt">Move transaction context across a signing boundary</h2>
+<p>A coordinator may assemble the unsigned transaction and ask a separate signer to approve it. A digest alone has discarded the context the signer needs. PSBT carries that context in maps. BIP371 adds fields for selecting and validating the particular Taproot path, in both PSBTv0 and PSBTv2.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Input PSBT field comparison table">
+<table>
+<thead>
+<tr><th scope="col">Input PSBT field</th><th scope="col">Content and use</th>
+</tr>
+</thead>
+<tbody>
+<tr><th scope=row>0x13 TAP_KEY_SIG</th><td>A 64- or 65-byte signature for the tweaked output key, returned by the signer.</td>
+</tr>
+<tr><th scope=row>0x14 TAP_SCRIPT_SIG</th><td>Map keyed by x-only pubkey || leaf hash, with the signature as value. A leaf hash identifies which digest extension was signed.</td>
+</tr>
+<tr><th scope=row>0x15 TAP_LEAF_SCRIPT</th><td>Control block as key data, script bytes followed by leaf version as the value. Gives the signer a proof it can verify against the prevout.</td>
+</tr>
+<tr><th scope=row>0x16 TAP_BIP32_DERIVATION</th><td>Keyed by x-only public key. Value has count and leaf hashes, then fingerprint and derivation path. Internal keys have zero associated leaf hashes.</td>
+</tr>
+<tr><th scope=row>0x17 TAP_INTERNAL_KEY</th><td>32-byte x-only internal key.</td>
+</tr>
+<tr><th scope=row>0x18 TAP_MERKLE_ROOT</th><td>Optional script-tree root, needed when recomputing a scripted policy’s output tweak.</td>
+</tr>
+</tbody>
+</table></div>
+<p>A witness UTXO supplies the amount and locking script. For non-ANYONECANPAY the signer needs appropriate prevout data for every input. Output fields can provide an internal key, a serialized tree (depth, leaf version and CompactSize-prefixed script in depth-first order), and derivation metadata. MuSig2 session metadata is separate (BIP373). Independently verify outpoints, scripts, amounts, recipients, change, fee, authorized sighash type, key origin, and the recomputed output or proof. Finalization builds the actual witness from the collected signatures and path data.</p>
+<h2 id="hsm">An HSM needs the signature scheme and the correct key</h2>
+<p>Suppose Alice’s internal key is inside a PKCS#11 HSM such as a Thales Luna device. secp256k1 support describes the curve. The ECDSA signing mechanism produces an ECDSA response governed by an inverse nonce equation, while BIP340 needs the linear Schnorr response and specific challenge and parity rules. Prehashing the message or re-encoding the ECDSA output cannot supply a valid BIP340 signature. An ECDSA-only interface cannot sign a Taproot key-path input using ordinary ECDSA calls.</p><div class="pair"><div class="plate">
+<h3>Key path</h3>
+<p>Compute Q publicly from x(P) and the committed root. The protected signer needs documented BIP340 signing and a way to normalize and apply the scalar tweak inside its trusted boundary, or an intentionally provisioned output-key signing capability. With multiple participants it needs the chosen secure signing protocol and tweak support.</p></div><div class="plate">
+<h3>Script path</h3>
+<p>An HSM-backed leaf key needs BIP340 for the leaf digest and normal even-Y normalization. It generally signs for the public key inside the leaf, with no TapTweak applied to that leaf key. The host still proves that the leaf belongs to the intended output.</p></div></div>
+<p>A signer should know what it authorizes, verify that its selected public key matches the approved policy, and use a vetted BIP340 nonce implementation. MuSig2 nonces require separate session handling and one-time use. Exporting a long-lived scalar to tweak it in application memory defeats the hardware boundary and exposes the internal key through crashes, logs, or memory access. A leaked tweaked scalar with the public tweak and parity can also expose the internal scalar.</p>
+<p>Check the mechanism list and documentation for the exact HSM model, firmware, policy mode and vendor extension, then confirm published test vectors with that device. This guide treats Luna as an integration scenario and makes no claim of BIP340 capability for any Luna model. <a href="https://thalesdocs.com/gphsm/luna/7/docs/network/Content/PDF_Network/SDK%20Reference.pdf">Thales Luna Network HSM 7 SDK reference</a>.</p>
+<h2 id="exercises">Check your understanding</h2><div class="exercise">
+<p><strong>Level 1 · Why should a hardware signer receive structured transaction data?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>What can a digest tell you about change and fees?</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>The signer needs outputs and trusted UTXO context to approve recipients and fees. It also needs the internal key/root or leaf proof and its key origin to check that it signs for the intended policy.</p>
+</details></div><div class="exercise">
+<p><strong>Level 2 · Does a leaf CHECKSIG use the same private scalar or digest as the key path?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>Find the public key each path checks.</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>Key path uses q and ext_flag=0, while the example leaf uses its recovery scalar and the Tapscript extension with its TapLeaf hash.</p>
+</details></div><div class="exercise">
+<p><strong>Level 3 · Run the Go example. Why does its negative control still fail after a fresh signature?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>Read the reported badSequenceError field.</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>A correct signature for sequence 143 cannot satisfy CSV(144). The script engine checks that independently of the cryptographic checks.</p>
+</details></div>
+<p><span class="source-label">Specifications</span> <a href="https://bips.dev/340/">BIP 340</a> · <a href="https://bips.dev/341/">BIP 341</a> · <a href="https://bips.dev/342/">BIP 342</a> · <a href="https://bips.dev/371/">BIP 371</a> · <a href="https://bips.dev/373/">BIP 373</a>
+</p>
+<p>Implementation references. <a href="https://github.com/btcsuite/btcd/blob/v0.24.2/txscript/taproot.go">btcd Taproot constructions</a> · <a href="https://github.com/btcsuite/btcd/blob/v0.24.2/txscript/sighash.go">btcd signature hashing</a> · <a href="https://github.com/bitcoin/bitcoin/blob/v28.1/src/script/interpreter.cpp">Bitcoin Core interpreter</a> · <a href="https://bitcoincore.org/en/doc/28.0.0/rpc/rawtransactions/testmempoolaccept/">testmempoolaccept RPC</a>.</p>
+  <nav class="page-turn" aria-label="Continue reading"><a href="./transactions.html"><small>Previous</small>Reading confirmed transactions</a><a href="./vault.html"><small>Next</small>Capstone: Build and spend the vault</a>
+</nav>
+  </article>
+</main>
+  <footer class="bookfooter book-shell"><a href="./">Taproot field guide</a><a href="./reference.html#sources">Sources</a><a href="../">Learning index</a>
+</footer>
+</body>
+</html>

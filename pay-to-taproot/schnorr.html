@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Schnorr and x-only keys · Bitcoin Taproot</title>
+  <link rel="stylesheet" href="./lesson.css">
+  <link rel="stylesheet" href="./book.css">
+  <script type="module" src="./experiments.mjs"></script>
+</head>
+<body class="book">
+  <a href="#main" class="skip-link">Skip to content</a>
+  <header class="bookbar"><div class="book-shell">
+    <a class="wordmark" href="./"><span aria-hidden="true">₿</span> Taproot field guide</a>
+    <nav aria-label="Site"><a href="./#contents">Contents</a><a href="./reference.html">Reference</a><a href="../">Learning index</a>
+</nav>
+  </div>
+</header>
+  <main id="main" class="book-shell chapter-layout">
+  <aside class="course-nav">
+<details>
+<summary>Chapters</summary>
+<nav aria-label="Chapters"><a  href="./why.html"><span>01</span>Why Taproot exists</a><a aria-current=page href="./schnorr.html"><span>02</span>Schnorr and x-only keys</a><a  href="./keys.html"><span>03</span>From an internal key to an address</a><a  href="./signing.html"><span>04</span>Key-path spends and signature hashing</a><a  href="./trees.html"><span>05</span>Script trees and control blocks</a><a  href="./tapscript.html"><span>06</span>Executing Tapscript</a><a  href="./cooperation.html"><span>07</span>Cooperative signing with MuSig2</a><a  href="./wallets.html"><span>08</span>BIP86 and wallet recovery</a><a  href="./transactions.html"><span>09</span>Reading confirmed transactions</a><a  href="./implementation.html"><span>10</span>Go, PSBT, and hardware signing</a><a  href="./vault.html"><span>11</span>Capstone: Build and spend the vault</a><a  href="./reference.html"><span>12</span>Glossary and worked reference</a>
+</nav>
+</details>
+<nav class="wide-nav" aria-label="Chapters"><a  href="./why.html"><span>01</span>Why Taproot exists</a><a aria-current=page href="./schnorr.html"><span>02</span>Schnorr and x-only keys</a><a  href="./keys.html"><span>03</span>From an internal key to an address</a><a  href="./signing.html"><span>04</span>Key-path spends and signature hashing</a><a  href="./trees.html"><span>05</span>Script trees and control blocks</a><a  href="./tapscript.html"><span>06</span>Executing Tapscript</a><a  href="./cooperation.html"><span>07</span>Cooperative signing with MuSig2</a><a  href="./wallets.html"><span>08</span>BIP86 and wallet recovery</a><a  href="./transactions.html"><span>09</span>Reading confirmed transactions</a><a  href="./implementation.html"><span>10</span>Go, PSBT, and hardware signing</a><a  href="./vault.html"><span>11</span>Capstone: Build and spend the vault</a><a  href="./reference.html"><span>12</span>Glossary and worked reference</a>
+</nav>
+</aside>
+  <article class="chapter">
+  <header class="chapter-head">
+<p class="overline">Part 2</p>
+<h1>Schnorr and x-only keys</h1>
+  <p class="lede">Derive the verification equation, then inspect the parity conventions and an official signature.</p>
+</header>
+  <nav class="local-nav" aria-label="On this page"><a href="#linearity">Why a linear signature helps</a><a href="#x-only">How to recover the point from 32 bytes</a><a href="#vector">Sign and verify an official BIP340 vector</a><a href="#exercises">Check your understanding</a>
+</nav>
+  <h2 id="linearity">Why a linear signature helps</h2>
+<p>Alice’s one-key wallet needs an ordinary signature. Alice and Bob’s vault would benefit from both people authorizing the same payment while seeing only one public key and one signature on chain. Schnorr’s equations give a secure coordination protocol something to build on. Start by writing down what changes relative to ECDSA.</p>
+<pre class="equation"><code>ECDSA:   R = kG    r = x(R) mod n    s = k⁻¹(z + r·d) mod n
+Schnorr: R = kG    r = x(R)          e = int(H_challenge(r || x(P) || M)) mod n
+                                     s = (k + e·d) mod n</code>
+</pre>
+<p><code>G</code> is the public secp256k1 generator and <code>n</code> is its order. The signer owns scalar <code>d</code> and uses fresh private nonce scalar <code>k</code>. <code>P = dG</code> is the public point and <code>R = kG</code> is the nonce point. For ECDSA, <code>z</code> is the signing hash interpreted as an integer. For BIP340, <code>M</code> is the message byte string, <code>e</code> is the public challenge, and <code>r</code> and <code>s</code> are encoded as 32-byte big-endian integers. The challenge hashes encoded values of <code>r</code> and <code>x(P)</code>, each 32 bytes. Schnorr’s r is a field coordinate, so <code>r &lt; p</code>, where p is the field modulus. ECDSA reduces its coordinate modulo n.</p>
+<ol class="flow" aria-label="Process diagram">
+<li><strong>Compute a nonce point</strong><span>R = kG</span>
+</li>
+<li><strong>Bind the context</strong><span>Hash R’s x coordinate, the public key, and the message.</span>
+</li>
+<li><strong>Respond</strong><span>Add the nonce scalar to e times the normalized signing scalar.</span>
+</li>
+<li><strong>Verify</strong><span>Multiply the response by G and reconstruct R.</span>
+</li>
+</ol>
+<pre class="equation"><code>sG = ((k + e·d) mod n)G
+   = kG + e(dG)          because nG = ∞
+   = R + eP
+R′ = sG − eP             verifier reconstructs the nonce point</code>
+</pre>
+<p>The verifier knows s, e, P, and G. It checks that the reconstructed point has the specified x coordinate and even Y. The same additive relationship is why coordinated partial responses can be combined in MuSig2. ECDSA signatures solve a different equation and cannot be converted into BIP340 signatures. Replacing Schnorr’s s with n−s changes the equation. BIP340 neither calls for Low-S normalization nor accepts both signs by convention.</p>
+<p>If k is reused with the same normalized signing key, subtract two valid equations: <code>s₁ − s₂ = (e₁ − e₂)d mod n</code>. When the challenges differ, inversion reveals d. Cross-protocol nonce reuse can also leak a shared secret. Use scheme-specific, audited nonce generation and avoid allowing a caller to choose arbitrary signing nonces.</p>
+<p>For the toy calculation we use the actual curve <code>y² = x³ + 2x + 2 mod 17</code>, with generator (5, 1) of order 19. The toy challenge is addition modulo 19. Bitcoin uses tagged SHA-256 and secp256k1. With raw d₀=2 and k₀=3, the normalized scalars are d=17 and k=3, giving P=(6,14) and R=(10,6). For message integer 4, e=1, s=1, and both sides equal (5,1).</p>
+<section class="workbench" id="schnorr-lab" aria-labelledby="schnorr-lab-title">
+<h3 id="schnorr-lab-title">Experiment B · Sign on a small elliptic curve</h3><div class="control-row"><label>Toy secret d₀<input name="secret" value="2" type="number" min="1" max="18"></label><label>Toy nonce k₀<input name="nonce" value="3" type="number" min="1" max="18"></label><label>Toy message M<input name="message" value="4" type="number" min="0" max="99"></label></div><div class="experiment-result" data-result aria-live="polite"></div>
+</section>
+<h2 id="x-only">How to recover the point from 32 bytes</h2>
+<p>A compressed SEC1 public key includes a prefix that tells you which Y coordinate to use. Schnorr can agree ahead of time to use even Y. On secp256k1, points that share X are <code>(x, y)</code> and <code>(x, p−y)</code>, since both have the same square modulo p. Because p is odd, their Y parities are opposite. The pair is one point and its group inverse.</p>
+<pre class="equation"><code>c = (x³ + 7) mod p
+y₀ = c^((p + 1)/4) mod p
+Reject if x ≥ p or y₀² mod p ≠ c.
+lift_x(x) = (x, y₀) if y₀ is even; otherwise (x, p − y₀).</code>
+</pre>
+<p>Here c is the right-hand side of the curve equation. The exponent is integral because secp256k1’s field modulus p is 3 mod 4. Check the candidate square before accepting it. X arrives as a public big-endian 32-byte word. With raw secret <code>d₀</code>, the matching normalized scalar is <code>d₀</code> if raw d₀G has even Y, or <code>n − d₀</code> otherwise. Thus <code>(n − d₀)G = −d₀G</code>. Do the same for the nonce so that x(R) identifies the nonce point the signer used.</p>
+<p>Ethereum’s ECDSA recovery yParity helps select a nonce-point candidate during recovery. The BIP340 public key convention chooses the even representative of a key. The Taproot control block later records the parity of a different point, the recomputed output Q.</p><div class="pair"><div class="plate">
+<h3>Even representative</h3>
+<pre class="equation"><code>P = (x, y_even)</code>
+</pre>
+<p>Encode x. Lift it back to this point.</p></div><div class="plate">
+<h3>Opposite point</h3>
+<pre class="equation"><code>−P = (x, p − y_even)</code>
+</pre>
+<p>Same encoded x. Scalar multiplication switches from d to n−d.</p></div></div>
+<section class="workbench" id="xonly-lab" aria-labelledby="xonly-lab-title">
+<h3 id="xonly-lab-title">Experiment C · Flip the point, preserve X</h3><div class="control-row"><label>Example scalar<input name="secret" value="1" type="number" min="1" max="20"></label><label>Raw point<select name="sign"><option value="positive">d₀G</option><option value="negative">(n − d₀)G</option></select></label></div><div class="experiment-result" data-result aria-live="polite"></div>
+</section>
+<h2 id="vector">Sign and verify an official BIP340 vector</h2>
+<p>Alice’s signer can reproduce the following vector from the message, private key, and auxiliary bytes. Auxiliary randomness hedges the signing process. The official all-zero aux example illustrates deterministic reproducibility. For deployments, the signer should follow the documented randomness and side-channel requirements.</p>
+<pre class="equation"><code>H_tag(X) = SHA256(SHA256(UTF8(tag)) || SHA256(UTF8(tag)) || X)
+a = H_BIP0340/aux(aux32)
+u = bytes32(d) XOR a
+k₀ = int(H_BIP0340/nonce(u || x(P) || M)) mod n
+k = k₀ if k₀G has even Y, else n − k₀
+r = x(kG);  e = int(H_BIP0340/challenge(bytes32(r) || x(P) || M)) mod n
+s = (k + e·d) mod n;  signature = bytes32(r) || bytes32(s)</code>
+</pre>
+<p>The signer rejects a raw secret outside [1, n−1] and a zero k₀. The 32-byte value a is the tagged hash of the auxiliary bytes. The masked secret u, raw nonce hash, and private k values stay inside an actual signing boundary. The published test vector can display them. Tags give separate hash domains to otherwise ambiguous byte streams. Verification lifts x(P), checks lengths and ranges, computes e independently, and rejects infinity, odd Y, or x(R′) unequal to r.</p>
+<section class="workbench" id="vector-lab" aria-labelledby="vector-lab-title">
+<h3 id="vector-lab-title">Worked reference · Inspect real secp256k1 bytes</h3><label>Official BIP340 signing vector<select name="vector"><option value="0">Vector 0 · zero auxiliary bytes</option><option value="1">Vector 1 · nonzero auxiliary bytes</option><option value="2">Vector 2</option><option value="3">Vector 3</option></select></label><div class="experiment-result" data-result aria-live="polite"></div>
+</section>
+<h2 id="exercises">Check your understanding</h2><div class="exercise">
+<p><strong>Level 1 · Why can the verifier reconstruct R from x(P) without a key prefix?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>Find the parity selected by lift_x.</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>The protocol always interprets x(P) as the even-Y point, and the signer normalizes d accordingly.</p>
+</details></div><div class="exercise">
+<p><strong>Level 2 · Take d₀=2, k₀=3 and change the toy message from 4 to 5. What is s?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>Only e and s change.</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>e = (10+6+5) mod 19 = 2. The response is (3+2·17) mod 19 = 18. The verifier reconstructs (10,6).</p>
+</details></div><div class="exercise">
+<p><strong>Level 3 · Open BIP340 vector 0. Which 32 bytes encode the response?</strong>
+</p>
+<details>
+<summary>Hint</summary>
+<p>Read the split r || s.</p>
+</details>
+<details>
+<summary>Worked solution</summary>
+<p>The trailing 32 bytes, beginning 25f66a4a, are s. The first 32 bytes, beginning e907831f, are the nonce coordinate.</p>
+</details></div>
+<p><span class="source-label">Specifications</span> <a href="https://bips.dev/340/">BIP 340</a> · <a href="https://bips.dev/327/">BIP 327</a>
+</p>
+  <nav class="page-turn" aria-label="Continue reading"><a href="./why.html"><small>Previous</small>Why Taproot exists</a><a href="./keys.html"><small>Next</small>From an internal key to an address</a>
+</nav>
+  </article>
+</main>
+  <footer class="bookfooter book-shell"><a href="./">Taproot field guide</a><a href="./reference.html#sources">Sources</a><a href="../">Learning index</a>
+</footer>
+</body>
+</html>

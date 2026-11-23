@@ -1,7 +1,7 @@
 // Public-data calculations for the lesson. Affine arithmetic here is variable-time.
-const FIELD = 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2fn;
-const ORDER = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
-const G = {
+export const FIELD = 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2fn;
+export const ORDER = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+export const G = {
   x: 0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798n,
   y: 0x483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8n,
 };
@@ -27,7 +27,7 @@ export function readHex(input, label, length) {
   return bytes;
 }
 
-function concat(...parts) {
+export function concat(...parts) {
   const result = new Uint8Array(parts.reduce((size, part) => size + part.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -37,18 +37,18 @@ function concat(...parts) {
   return result;
 }
 
-function compactSize(length) {
+export function compactSize(length) {
   if (length < 253) return Uint8Array.of(length);
   if (length <= 0xffff) return Uint8Array.of(253, length, length >> 8);
   return Uint8Array.of(254, length, length >> 8, length >> 16, length >> 24);
 }
 
-async function sha256(bytes) {
+export async function sha256(bytes) {
   if (!globalThis.crypto?.subtle) throw new Error("SHA-256 requires HTTPS or a local server at localhost.");
   return new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", bytes));
 }
 
-async function taggedHash(tag, message) {
+export async function taggedHash(tag, message) {
   if (!tagPrefixes.has(tag)) tagPrefixes.set(tag, sha256(encoder.encode(tag)));
   const prefix = await tagPrefixes.get(tag);
   return sha256(concat(prefix, prefix, message));
@@ -58,7 +58,7 @@ function mod(number) {
   return (number % FIELD + FIELD) % FIELD;
 }
 
-function pow(base, exponent) {
+export function pow(base, exponent) {
   let result = 1n;
   while (exponent) {
     if (exponent & 1n) result = mod(result * base);
@@ -81,7 +81,7 @@ function inverse(number) {
   return mod(x);
 }
 
-function pointFromX(bytes) {
+export function pointFromX(bytes) {
   const x = BigInt("0x" + hex(bytes));
   if (x >= FIELD) throw new Error("The internal key’s x coordinate is outside the secp256k1 field.");
   const square = mod(x ** 3n + 7n);
@@ -90,7 +90,7 @@ function pointFromX(bytes) {
   return { x, y: y & 1n ? FIELD - y : y };
 }
 
-function add(a, b) {
+export function add(a, b) {
   if (a === null) return b;
   if (b === null) return a;
   if (a.x === b.x && mod(a.y + b.y) === 0n) return null;
@@ -101,9 +101,8 @@ function add(a, b) {
   return { x, y: mod(slope * (a.x - x) - a.y) };
 }
 
-function multiplyGenerator(scalar) {
+export function multiply(scalar, point = G) {
   let result = null;
-  let point = G;
   while (scalar) {
     if (scalar & 1n) result = add(result, point);
     point = add(point, point);
@@ -118,10 +117,11 @@ export async function outputKey(internalKey, root) {
   const tweak = await taggedHash("TapTweak", preimage);
   const scalar = BigInt("0x" + hex(tweak));
   if (scalar >= ORDER) throw new Error("TapTweak is at least the curve order.");
-  const output = add(point, multiplyGenerator(scalar));
+  const output = add(point, multiply(scalar));
   if (output === null) throw new Error("The output point is the point at infinity.");
   return {
     tweak, preimage,
+    point: output,
     key: readHex(output.x.toString(16).padStart(64, "0"), "Output key", 32),
     parity: Number(output.y & 1n),
   };
@@ -181,8 +181,7 @@ export async function verifyCommitment(expectedKey, script, control) {
   return { leaf, version, parity, internalKey, root, steps, output, keyMatches, parityMatches };
 }
 
-export function mainnetAddress(key) {
-  const hrp = "bc";
+export function mainnetAddress(key, hrp = "bc") {
   const alphabet = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
   const generators = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
   const data = [1];
