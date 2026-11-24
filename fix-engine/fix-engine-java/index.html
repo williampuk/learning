@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f3ee">
+  <meta name="description" content="A practical Java guide to building, benchmarking, and operating a FIX engine, with a runnable QuickFIX/J recovery lab.">
+  <title>Building a FIX Engine in Java</title>
+  <link rel="stylesheet" href="./lesson.css">
+  <script type="module" src="./lesson.mjs"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to the guide</a>
+  <header class="site-header">
+    <div class="shell topbar">
+      <a class="brand" href="../../"><span aria-hidden="true">↖</span> Interactive Learning</a>
+      <a class="top-link" href="#java">Java lab <span aria-hidden="true">↘</span></a>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <div class="shell hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Trading systems / Java</p>
+        <h1>Building a FIX<br class="wide-break"> Engine in Java</h1>
+        <p class="lede">The connection drops after the venue accepts your order. Is it still open, or did it fill? Follow one order through recovery, then build and measure the engine that helps you answer.</p>
+        <a class="button" href="#recovery">Run the recovery lab <span aria-hidden="true">↓</span></a>
+      </div>
+      <figure class="hero-trace">
+        <figcaption><span class="signal" aria-hidden="true"></span> C42 <span>Recorded on the broker</span></figcaption>
+        <ol role="list">
+          <li><span>OUT</span><code>34=2 · 35=D</code><strong>Order sent</strong></li>
+          <li><span>IN</span><code>34=2 · 35=8</code><strong>Order accepted</strong></li>
+          <li class="cut"><span>—</span><code>TCP EOF</code><strong>Fill status unknown</strong></li>
+          <li><span>IN</span><code>34=4 · 35=A</code><strong>Sequence 3 missing</strong></li>
+        </ol>
+        <p>Two directions have independent sequence numbers.</p>
+      </figure>
+    </div>
+
+    <div class="shell layout">
+      <nav class="outline" aria-label="Guide sections">
+        <a href="#architecture">Architecture</a><a href="#recovery">Recovery walkthrough</a><a href="#java">Build in Java</a><a href="#checkpoint">Crash lab</a>
+        <a href="#performance">Performance</a><a href="#operations">Production debugging</a>
+        <a href="#roles">FIX roles</a><a href="#sources">Sources</a>
+      </nav>
+      <article class="lesson">
+        <section id="architecture" class="chapter">
+          <h2>Give each layer one job</h2>
+          <p>You should already know FIX Logon, Heartbeat, ResendRequest, the order lifecycle, and basic Java. We’ll use classic tag-value FIX 4.4 over TCP, with a broker acting as the <strong>initiator</strong> and a simulated venue as the <strong>acceptor</strong>.</p>
+          <ol class="pipeline" role="list" aria-label="Inbound execution report path">
+            <li><strong>Socket</strong><span>TCP bytes, TLS in production</span></li>
+            <li><strong>Framer</strong><span>Complete message and checksum</span></li>
+            <li><strong>Session</strong><span>Logon, sequence, timers, replay</span></li>
+            <li><strong>Venue adapter</strong><span>Dictionary, IDs, event mapping</span></li>
+            <li><strong>Order ledger</strong><span>Idempotent state and fills</span></li>
+          </ol>
+          <p>The engine owns FIX sequencing and recovery across TCP connections. The venue adapter translates the counterparty’s rules and messages. The order management system (OMS) owns intent, order state, and reconciliation, and coordinates risk checks before releasing orders. For C42, <code>34=3</code> locates a venue-to-broker message in one session sequence cycle. <code>11=C42</code>, <code>37=V900</code>, and <code>17=E2</code> locate the client order, venue order, and execution in their agreed scopes.</p>
+          <p>A successful write tells you local transport accepted bytes. A successful Logon tells you the peer established a session. An execution report or other verified venue evidence establishes business state. Keep those signals separate in code, metrics, and incident updates.</p>
+          <p>If you’re building <strong>venue connectivity</strong>, keep the engine and implement the venue contract, OMS integration, and certification tests. If you’re building <strong>the engine itself</strong>, start with a reference peer, build the framer and session owner in stages, and compare behavior under the same fault cases. Both paths use the same C42 trace and have to explain the same final position.</p>
+
+          <h3>Start with the counterparty contract</h3>
+          <p>Version-control the venue’s rules of engagement, FIX version, custom dictionary, field and group rules, CompIDs, session schedule and time zone, heartbeat, TLS and authentication, traffic limits, and primary/backup behavior. Record when sequence numbers reset, which messages are replayable, whether the venue cancels on disconnect, and how to recover orders or fills through status queries or drop copy, where available.</p>
+          <aside class="note">
+            <strong>Read a real venue spec</strong>
+            <p>NYSE Pillar’s equities gateway uses FIX 4.2. Compare §1.3 (failure recovery), §7.5 (retransmission), and §9 (drop copies). Primary/secondary recovery and disaster recovery have different sequence and replay rules. Create separate certification tests for those cases. The lab uses a generic FIX 4.4 profile. <a href="https://www.nyse.com/publicdocs/nyse/NYSE_Pillar_Gateway_FIX_Protocol_Specification.pdf">NYSE Pillar FIX Gateway specification</a></p>
+          </aside>
+        </section>
+
+        <section id="recovery" class="chapter">
+          <h2>Recover a missing fill</h2>
+          <p>The broker buys 100 shares of <code>DEMO</code> at a limit of 25.00. The venue accepts C42 as V900. Predict what the broker should do when the reconnect Logon arrives with sequence 4 and it still expects 3.</p>
+
+          <div id="recovery-lab" class="trace-lab" hidden>
+            <div class="trace-controls">
+              <label for="scenario">Recovery scenario</label>
+              <select id="scenario">
+                <option value="replay">Recover the missing fill</option>
+                <option value="gap">Fill is unavailable for replay</option>
+                <option value="duplicate">Fill was booked before a crash</option>
+              </select>
+            </div>
+            <dl class="state-grid">
+              <div><dt>Session</dt><dd id="session-state">Live</dd></div>
+              <div><dt>Next expected venue sequence</dt><dd id="next-sequence">2</dd></div>
+              <div><dt>Broker ledger</dt><dd id="ledger-state">Order sent</dd></div>
+            </dl>
+            <ol id="lab-trace" class="trace-rows" role="list" aria-label="Session trace"></ol>
+            <p id="trace-status" class="trace-status" role="status" aria-atomic="true"></p>
+            <div class="actions">
+              <button id="advance" type="button">Next event</button>
+              <button id="reset-trace" type="button" class="secondary">Reset trace</button>
+            </div>
+          </div>
+
+          <details open>
+            <summary>Worked trace and expected result</summary>
+            <div class="table-wrap" tabindex="0" role="region" aria-label="Worked recovery trace">
+              <table>
+                <thead><tr><th scope="col">Wire event</th><th scope="col">Broker’s next expected inbound</th><th scope="col">Order ledger</th></tr></thead>
+                <tbody>
+                  <tr><td>Venue <code>34=2, 35=8, 150=0</code> acknowledges C42.</td><td>3</td><td>Accepted, 100 open.</td></tr>
+                  <tr><td>Venue assigns 3 to fill E2. Link drops before the broker receives it.</td><td>3</td><td>Last known state is accepted.</td></tr>
+                  <tr><td>Reconnect Logon has <code>34=4</code>. Broker requests <code>35=2, 7=3, 16=3</code>.</td><td>3, with a gap detected</td><td>Outcome still uncertain.</td></tr>
+                  <tr><td>Venue replays E2 with <code>34=3, 43=Y</code> and original sending time in <code>122</code>.</td><td>4</td><td>Apply E2 once. 100 filled, 0 open.</td></tr>
+                  <tr><td>Broker accounts for the reconnect Logon it already saw at sequence 4.</td><td>5</td><td>100 filled, 0 open.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>A <strong>gap fill</strong> with <code>35=4, 34=3, 43=Y, 123=Y, 36=4</code> would skip 3 and allow session progress. If the skipped execution is unavailable for replay under the agreed rules, investigate through the approved recovery source. A healthy sequence counter alone leaves C42 unresolved.</p>
+            <p>If the ledger committed E2 before a crash but the session checkpoint stayed at 3, replay still closes the session gap. The ledger detects E2’s existing key and leaves the filled quantity at 100. <code>43=Y</code> tells you the transmission may be a duplicate. The ledger tells you whether the business event was applied. <a href="https://fixtrading.org/standards/fixsession/">FIX Trading Community session standard</a></p>
+          </details>
+        </section>
+
+        <section id="java" class="chapter">
+          <h2>Build the Java engine in stages</h2>
+          <p>Run the wire lab before implementing your own session behavior. It uses QuickFIX/J 3.0.2 on both ends of a TCP link and gives you a reference trace to compare with your own implementation. From the repository root, run it with JDK 17 or newer, Maven, and a free loopback port 19876.</p>
+          <pre aria-label="Run the recovery lab from the repository root"><code>mvn -f fix-engine/fix-engine-java/java/pom.xml compile exec:exec</code></pre>
+          <p>The harness submits C42 once, forwards the acknowledgement, drops the original E2 frame, and closes both sockets. QuickFIX/J reconnects and requests recovery using separate file stores. The program checks the retransmission headers and prints <code>PASS: replayed E2 applied once. Filled 100, leaves 0.</code> Look for the evidence directory in its output and compare the two <code>*.messages.log</code> files. The console uses <code>|</code> to display the otherwise invisible SOH separators.</p>
+          <details>
+            <summary>Read the captured QuickFIX/J trace</summary>
+            <p>These are selected fields from a successful run. The browser model requests only sequence 3 and accounts for the Logon separately. Here <code>16=0</code> requests everything from 3 onward, so QuickFIX/J replays E2 at 3 and gap-fills the administrative sequence 4.</p>
+            <pre aria-label="Selected fields from the verified QuickFIX/J wire trace"><code>VENUE  → BROKER   35=A | 34=4
+BROKER → VENUE    35=2 | 34=4 | 7=3 | 16=0
+VENUE  → BROKER   35=8 | 34=3 | 43=Y | 17=E2 | 32=100
+VENUE  → BROKER   35=4 | 34=4 | 43=Y | 123=Y | 36=5</code></pre>
+            <p>Compare the original E2 in the venue log with the replay in the broker log. The replay’s <code>122</code> equals the original’s <code>52</code>. Its checksum and body length are recomputed for the transmitted bytes.</p>
+          </details>
+          <p class="file-links"><a href="./java/src/main/java/learning/fix/RecoveryLab.java">RecoveryLab.java</a><a href="./java/src/main/java/learning/fix/TagValueFrame.java">TagValueFrame.java</a><a href="./java/pom.xml">pom.xml</a></p>
+          <p>The simulator fills immediately and uses plaintext loopback. QuickFIX/J handles the session, while the fault link and broker ledger belong to the lab. The same processes remain running through the link cut. The <a href="#checkpoint">crash lab</a> exercises what happens when the process itself dies.</p>
+
+          <h3>1. Frame bytes, then decode fields</h3>
+          <p>Keep a buffer per connection. TCP reads can end in the middle of a message or include several messages. Read <code>8</code> and <code>9</code>, then count <code>BodyLength</code> bytes from immediately after the delimiter closing tag 9, up to the start of tag 10. Verify the seven-byte trailer <code>10=ddd&lt;SOH&gt;</code>. Compute the sum of unsigned bytes before tag 10 modulo 256. Treat lengths as untrusted, cap message size and incomplete-frame time, and retain surplus bytes.</p>
+          <p>The Java framer sits inside the lab’s fault link. It uses a buffered blocking stream so the byte boundaries are easy to inspect. A production codec should handle partial writes, stream cumulation, length/data pairs whose values may contain SOH, and dictionary-aware repeating groups. Measure parsing before replacing generic field objects with generated decoders or byte slices. Make buffer ownership explicit when handing data off across threads. <a href="https://fixtrading.org/packages/fix-tagvalue-encoding/">FIX tag-value encoding standard</a></p>
+          <p>Build an incremental decoder by feeding one known-good frame at every possible split point, then feeding two frames in one read. Assert that the output bytes match the originals and that an incomplete or malformed frame never reaches the session. Keep outbound frames queued until their last byte has been written.</p>
+
+          <h3>2. Model the session and its timers</h3>
+          <p>Define transitions for disconnected, connecting, awaiting Logon, live, recovering, and logging out. Track next outbound and next expected inbound independently. Give each session one logical owner, such as an event loop that serializes timer ticks, writes, reconnect, and replay. Use a monotonic clock for elapsed time and UTC wall time for FIX timestamps and cross-host evidence.</p>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Inbound sequence cases">
+            <table>
+              <thead><tr><th scope="col">Inbound event</th><th scope="col">Engine responsibility</th></tr></thead>
+              <tbody>
+                <tr><td>Sequence equals expected</td><td>Validate and account for the message, then advance according to its type. Keep delivery and checkpoint semantics explicit.</td></tr>
+                <tr><td>Sequence above expected</td><td>Record the missing interval, send or extend a resend request under the session policy, and bound pending work. Release higher application messages only in order. Implement special handling of administrative messages according to the profile.</td></tr>
+                <tr><td>Sequence below expected</td><td>Check duplicate flags and timestamps. Suppress already-processed retransmissions and handle an unexpected low original according to the standard and venue rules.</td></tr>
+                <tr><td>Peer requests resend</td><td>Read the historical range in sequence order. Re-encode eligible messages using original sequence and sending time in tag 122, current tag 52, <code>43=Y</code>, and new length/checksum. Gap-fill ranges the profile allows you to skip.</td></tr>
+                <tr><td>Peer stops sending</td><td>Use the negotiated HeartBtInt and profile rules to drive idle heartbeats, a TestRequest with its identifier, and a disconnect if the peer fails to respond.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Keep <strong>Gap Fill</strong> and <strong>Reset mode</strong> separate. A gap fill advances beyond a skipped interval. A reset can bypass normal recovery and requires a specific operational policy. Include schedule rollover, reconnect backoff, simultaneous recovery in both directions, and duplicate Logon in tests.</p>
+          <p>For a custom engine, drive this state machine with decoded messages and a controllable clock before adding sockets. Give it a test store and record the commands it emits, such as send ResendRequest, arm a timer, or deliver an execution. Then connect it to the lab’s reference peer. As a milestone, prove that venue sequence 4 never causes the broker to skip E2 at 3 and that replay leaves the broker’s outbound counter independent.</p>
+
+          <h3>3. Decide what survives each crash</h3>
+          <ul>
+            <li><strong>Outbound.</strong> Persist business intent and ID before release. When promising replay after a crash, journal the outbound frame with its assigned sequence before it becomes externally visible. Recover the replay index and next sequence from a consistent committed prefix. Distinguish queued, committed, socket write, peer acknowledged, and business accepted.</li>
+            <li><strong>Inbound.</strong> Advance the durable checkpoint once the event is durably applied or recoverable from a durable inbox. Use a transactional inbox or idempotent consumer and test crashes on each side of its commit. Scope execution deduplication to the venue’s ID rules and keep trade corrections and busts as distinct business events.</li>
+            <li><strong>Failover.</strong> Fence the old sender before a standby takes the same session identity. Recover journals and counters, reconnect under the venue’s policy, and reconcile in-flight orders before lifting the relevant order-entry gate. A replicated store can still lose uncommitted data.</li>
+          </ul>
+          <p>A checkpoint is the position that recovery will resume from. Document which failure each acknowledgement and checkpoint can survive. A write into the OS page cache, a forced local append, and a replicated commit have different durability and latency. Test process kill, host loss, disk full, slow flush, partial records, and restore with actual storage settings.</p>
+          <details>
+            <summary>Sketch the commit order for your own engine</summary>
+            <pre aria-label="Pseudocode for session and ledger commit order"><code>Outbound on the session owner
+  claim next sequence after admission and risk checks
+  append session cycle, sequence and replayable bytes to journal
+  commit according to the agreed durability policy
+  publish frame to socket writer in sequence order
+
+Inbound eligible application message
+  transaction {
+    insert event identity into inbox if absent
+    apply ledger update only if the insert succeeds
+    persist the application delivery checkpoint
+  }
+  advance durable session progress when delivery is recoverable</code></pre>
+            <p>Store the outbox intent and the assigned sequence so restart can tell an existing submission from a fresh one. If the inbox and session checkpoint live in different stores, a crash after the inbox commit can cause replay. The unique inbox key makes that replay safe. When a journal record never committed, recovery starts from the last committed prefix. A torn record should never look like a successful send.</p>
+            <p>For C42, if outbound sequence 2 is committed and the process dies before it records a socket write, recover sequence 2 and its original order identity from the journal. The broker may be unsure how far bytes traveled. Use the venue’s session recovery and order reconciliation rules to choose the next action. Assigning C42 a new sequence as a fresh submission can create a second order.</p>
+          </details>
+
+          <h3>4. Integrate QuickFIX/J with the OMS</h3>
+          <p>Use <code>SessionSettings</code>, a versioned data dictionary, a replay-capable <code>MessageStoreFactory</code>, and an <code>Application</code> implementation. Put peer-specific Logon fields in <code>toAdmin</code> where appropriate. Translate <code>fromApp</code> into small owned events, and keep slow database calls, HTTP calls, and log formatting off shared dispatch threads. Inspect and benchmark the connector’s threading model before choosing shared dispatch or thread-per-session.</p>
+          <p>Use a bounded, ordered handoff. An in-memory queue can accept E2, let the session checkpoint advance, and lose E2 on process exit. A durable inbox can make E2 recoverable before the application callback returns, then let a worker apply it later. Budget the inbox commit in callback latency. When storage or capacity fails, hold new order admission and verify how your engine accepts, rejects, or checkpoints the current message. Exercise that exact failure with a real peer or the simulator. <a href="https://quickfixj.org/docs/developer-docs/">QuickFIX/J application API</a> · <a href="https://quickfixj.org/docs/configuration/">Session settings</a> · <a href="https://github.com/quickfix-j/quickfixj/blob/master/docs/threading-developer-guide.md">Threading model</a></p>
+
+          <h3>5. Certify failure behavior</h3>
+          <p>Replay sanitized venue fixtures in CI. Test split and merged reads, wrong body length or checksum, invalid groups, high and unexpectedly low sequences, replay interleaved with new traffic, and reset day boundaries. Kill the process between journal append, send, event commit, and checkpoint. Assert sequence continuity, bounded queues, and one business effect per execution, including after restart. Then run the venue’s certification cases for order, cancel/replace, reject, partial fill, reconnect and recovery, and record the evidence with both sides’ sequence numbers and IDs.</p>
+          <p>Run a failover drill with an accepted order whose fill is still uncertain. Check that only one process can send under the session identity, recovery resolves the gap, and the ledger matches the venue before reopening order admission. Model that admission gate separately from TCP and FIX Logon so your application can show why the desk is still waiting.</p>
+        </section>
+
+        <section id="checkpoint" class="chapter">
+          <h2>Crash between the fill and the checkpoint</h2>
+          <p>What survives if the broker books E2 at sequence 3 and dies before recording that it expects 4? This JDK-only exercise halts a JVM at that exact point and starts a new process to feed the same fill back to the ledger. Run the lines individually from the repository root in a POSIX shell with JDK 17 or newer.</p>
+          <pre aria-label="Commands to run the checkpoint crash lab"><code>cd fix-engine/fix-engine-java/java/src/main/java
+lab=learning/fix/CheckpointLab.java
+scratch=$(mktemp -d)
+java "$lab" crash "$scratch"
+java "$lab" replay "$scratch"
+java "$lab" replay "$scratch"</code></pre>
+          <ol>
+            <li><code>crash</code> writes and forces <code>E2.fill</code>, then halts with exit code 73. The record carries the execution identity and 100 filled. The missing <code>next-inbound</code> file means the fixture still expects 3.</li>
+            <li>The first <code>replay</code> reads the existing fill, recognizes its identity, and writes <code>4</code> to <code>next-inbound</code>. Expect <code>E2 already booked. Filled 100. Expected inbound 3 -&gt; 4.</code></li>
+            <li>The second <code>replay</code> explicitly feeds E2 to the ledger again. Expect the same quantity and <code>Expected inbound 4 -&gt; 4.</code></li>
+          </ol>
+          <p>For a control, replay in a second fresh directory. With no existing E2, expect <code>Booked E2. Filled 100. Expected inbound 3 -&gt; 4.</code> The same delivery works whether the pre-crash commit happened or the process died earlier.</p>
+          <p>The fixture treats one keyed file as its whole ledger. A production ledger typically inserts a venue-scoped inbox key and updates order state in the same transaction. The exercise covers a forced process halt after a completed file write. Host loss, partial writes, and replication need their own storage design and tests. <a href="./java/src/main/java/learning/fix/CheckpointLab.java">CheckpointLab.java</a> · <a href="https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/nio/channels/FileChannel.html#force(boolean)">JDK FileChannel.force</a></p>
+        </section>
+
+        <section id="performance" class="chapter">
+          <h2>Design for the tail</h2>
+          <p>The best engine for a workload is the one that meets its latency, peak throughput, recovery, and durability targets together. Start with the representative message mix, session count, sustained rate, burst duration, CPU budget, replay window, and maximum acceptable recovery time. Define the point at which an event counts as durable before measuring it.</p>
+          <p>For example, a team might require p99.9 below 2 ms for local handoff at 30,000 messages per second across 20 sessions, and recovery of a 50,000-message gap within 10 seconds while other sessions stay within their limits. These are illustrative acceptance criteria. Publish the offered rate, completed rate, errors, and the exact start and end of each timing interval beside the result.</p>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Performance architecture tradeoffs">
+            <table>
+              <thead><tr><th scope="col">Design choice</th><th scope="col">What to measure or protect</th></tr></thead>
+              <tbody>
+                <tr><td>Single writer per session, sessions sharded across loops</td><td>Ordered state without contended per-message locks. Check fairness during large replay and isolate busy sessions if necessary.</td></tr>
+                <tr><td>Reusable buffers and dictionary-generated codecs</td><td>Bytes allocated per message, GC pauses, and ownership across queues. Represent prices as scale-aware fixed-point values where the venue contract permits.</td></tr>
+                <tr><td>Bounded queues and high-water marks</td><td>Queue age and rejected admissions under bursts. Keep enough capacity for recovery and session traffic while preserving wire ordering.</td></tr>
+                <tr><td>Append-only replay journal and range index</td><td>Measure append, commit and replay separately. Group commit trades time waiting for a batch against storage efficiency. Keep replay work bounded so live sessions make progress.</td></tr>
+                <tr><td>Selector, dedicated polling, or hybrid idle strategy</td><td>Compare tail jitter and CPU cost on target hosts. Profile scheduler wakeups, core placement, NUMA locality and NIC interrupts before tuning.</td></tr>
+                <tr><td>Separate telemetry from session processing</td><td>Budget synchronous audit work required by policy. Sample diagnostic counters and make sink lag visible. Exercise full disk, log rotation, and telemetry slowdown.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Estimate the cost of a burst</h3>
+          <p>Assume an empty FIFO queue, constant arrivals for 50 ms, one consumer processing 60,000 messages per second, and arrivals stopping after the burst. Predict how much work is still queued when the burst ends.</p>
+          <div class="burst-lab" id="burst-lab" hidden>
+            <form id="burst-form">
+              <label for="arrival">Burst arrival rate <output id="arrival-rate" for="arrival">100,000 msg/s</output></label>
+              <input id="arrival" type="range" min="40000" max="160000" step="10000" value="100000">
+              <div class="range-labels" aria-hidden="true"><span>40,000 msg/s</span><span>160,000 msg/s</span></div>
+              <button type="button" class="secondary" id="reset-burst">Reset burst</button>
+            </form>
+            <div class="burst-results" aria-live="polite" aria-atomic="true">
+              <p><strong id="backlog">2,000</strong> messages waiting</p>
+              <p><strong id="drain">33.3 ms</strong> to drain after arrivals stop</p>
+            </div>
+          </div>
+          <p>At 100,000 messages per second, <code>(100,000 − 60,000) × 0.05 = 2,000</code> messages accumulate. At 60,000 messages per second those take about 33.3 ms to clear, even if the consumer takes only about 16.7 μs per message. If traffic continues, the drain rate is the consumer’s spare capacity. A 1,500-message queue in this example would fill before the burst ends. Define what happens at that boundary before increasing its size.</p>
+
+          <h3>Benchmark the promise you make</h3>
+          <ol>
+            <li><strong>Use two scopes.</strong> Use JMH for a codec or allocation experiment. Use a paced load generator and a separate peer for end-to-end runs with your real dictionaries, TLS, store, validation, logging, and warm-up. Keep hardware, JVM, session mix, and durability constant when comparing engines.</li>
+            <li><strong>Time meaningful boundaries.</strong> Record queue wait, frame decode, application handoff, journal commit, socket write and local order-to-ack round trip. For in-process durations use a monotonic clock. Report p50, p99, p99.9, sample counts, throughput, rejected or timed-out messages, and queue age. A p99 of 2 ms means about 99% of measured samples complete within 2 ms.</li>
+            <li><strong>Keep offering traffic during pauses.</strong> In an open-loop test, schedule arrivals independently of responses and measure from intended arrival. Track late submissions and timeouts. If the generator waits for each reply, it can miss the requests that would have arrived during a stall. This bias is called coordinated omission.</li>
+            <li><strong>Measure failure under load.</strong> Sweep load past saturation, reconnect during a burst, replay a large range while other sessions are live, and inject slow disk or a slow consumer. Report recovery time and correctness alongside latency. Profile before and after each change with allocation data, JFR, CPU and storage metrics.</li>
+          </ol>
+          <p>Compare QuickFIX/J as a baseline with a low-latency design such as Artio, which separates its gateway and application library and uses Aeron between them. Build a specialized engine when the remaining gap is measured and the team can maintain certification, recovery, and support. If the venue offers a binary protocol, evaluate it as a separate integration with its own contract. <a href="https://github.com/artiofix/artio">Artio architecture</a> · <a href="https://github.com/openjdk/jmh">OpenJDK JMH</a> · <a href="https://github.com/HdrHistogram/HdrHistogram">HdrHistogram and coordinated omission</a></p>
+
+          <h3>Find the part of the path that got slower</h3>
+          <p>Consider an illustrative benchmark using the same traffic profile and durability settings in both runs. At 30,000 messages per second the engine meets its 2 ms local handoff p99.9 target. Add a replay on one session and live traffic on the others misses that target.</p>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Illustrative latency measurements with and without concurrent replay">
+            <table>
+              <thead><tr><th scope="col">Timing boundary</th><th scope="col">Live only, p99.9</th><th scope="col">Live during replay, p99.9</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Complete frame received to durable inbox</th><td>1.2 ms</td><td>6.4 ms</td></tr>
+                <tr><th scope="row">Frame decode</th><td>14 µs</td><td>15 µs</td></tr>
+                <tr><th scope="row">Waiting for session dispatch</th><td>0.3 ms</td><td>5.5 ms</td></tr>
+                <tr><th scope="row">Inbox commit</th><td>0.7 ms</td><td>0.7 ms</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <details>
+            <summary>Which experiment would you run next?</summary>
+            <p>Inspect individual slow-message traces for time spent waiting behind replay on the shared loop. Percentiles for separate stages may come from different messages, so use per-message spans to confirm the cause. Then try giving replay a bounded work budget per loop turn, preserving order within its session, and compare both live p99.9 and replay completion time against their targets. Keep offered load, accepted and completed counts, and the durability boundary the same.</p>
+          </details>
+        </section>
+
+        <section id="operations" class="chapter">
+          <h2>Debug a live session from evidence</h2>
+          <p>Start by identifying the affected session, time range in UTC, last known good event, and orders with uncertain state. Follow the desk’s incident procedure to gate affected order entry and coordinate with trading, risk, and the counterparty. Preserve both directions of the FIX logs, journal positions, the active dictionary and config versions, and deployment or failover events. Keep credentials and customer data out of shared traces.</p>
+          <h3>Find the first layer that disagrees</h3>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Production FIX triage matrix">
+            <table>
+              <thead><tr><th scope="col">Symptom</th><th scope="col">First checks and next action</th></tr></thead>
+              <tbody>
+                <tr><td>No Logon</td><td>Distinguish TCP connection failure, TLS failure, and FIX Logon rejection. Check endpoint, allowlists, certificate chain and identity, time window, CompIDs, and peer Logout text. Compare both sides’ timestamps.</td></tr>
+                <tr><td>Resend loop or low sequence</td><td>Write down each side’s next sender and target number. Compare one direction at a time. Inspect tags 34, 7, 16, 43, 122, 123 and 36, the persisted replay range, scheduled resets and standby ownership. Escalate a proposed reset with the peer and reconcile its effect on open orders.</td></tr>
+                <tr><td>TCP live, heartbeats late</td><td>Match <code>112</code> on the TestRequest and reply. Compare receive timestamps with callback and timer lag. Check retransmits and socket queues, GC pauses, process CPU throttling, stalled storage and slow callbacks before adjusting timeouts.</td></tr>
+                <tr><td>Reject flood</td><td>Separate session Reject <code>35=3</code>, BusinessMessageReject <code>35=j</code>, and order rejection via ExecutionReport <code>35=8, 39=8</code> where the profile uses them. Correlate reference sequence, message type, reason and fields when available. Diff dictionary and venue rules, including group counts, tick size, quantity and permissions.</td></tr>
+                <tr><td>Missing or repeated fill</td><td>Trace client order ID, venue order ID and scoped execution ID through raw messages, session handling, durable inbox and OMS. Compare cumulative and leaves quantities, replay flags, and the business commit. Reconcile using approved status or drop-copy evidence. Treat corrections and busts as separate events.</td></tr>
+                <tr><td>Latency spikes around the open</td><td>Compare offered load, queue depth and age, journal flush, app callback time, TCP metrics and JVM pauses on a shared timeline. If decode stays flat but queue age rises, isolate the blocked or saturated downstream stage.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Walk the C42 incident</h3>
+          <ol>
+            <li><strong>Contain.</strong> The broker’s last accepted inbound sequence is 2. Mark C42’s outcome uncertain and keep its original ID. Submitting a new order with a new ID could create a second live order.</li>
+            <li><strong>Locate the gap.</strong> Compare the broker’s expected inbound 3 with the venue’s outbound journal. The reconnect Logon at 4 explains the resend. Check which messages the venue replays or gap-fills.</li>
+            <li><strong>Prove the fill.</strong> Match E2 to V900 and C42. Verify 100 filled and zero leaves in the ledger and any required independent source. If 3 is gap-filled, leave the order unresolved until approved evidence resolves it.</li>
+            <li><strong>Restore and follow up.</strong> Confirm sequence progress, healthy queues, no unexplained fills, and agreement with the desk before resuming the affected flow. Save a redacted timeline, add a regression fixture for the incident, and attach it to the runbook.</li>
+          </ol>
+          <details>
+            <summary>The FIX log shows E2, but the OMS shows zero filled</summary>
+            <p>Start with the first missing handoff. Suppose the broker’s receive log shows <code>34=3, 17=E2, 32=100</code> and the durable session checkpoint says expected inbound 5. Search for E2 in the inbox by its venue-scoped key. If it is absent, check callback errors and inbox admission before the checkpoint moved. If it is present but unapplied, check worker lag and the ledger transaction outcome. If it is marked applied, compare the ledger row and OMS projection versions. A receive log only proves the frame reached the logging point.</p>
+            <p>Leave C42 unresolved while you compare venue evidence. Recover E2 through the approved reconciliation path and verify 100 filled, zero leaves and one business effect before closing the incident. The checkpoint alone will not trigger a resend for 3 in this example.</p>
+          </details>
+          <details>
+            <summary>What to collect during a latency incident</summary>
+            <p>Capture session event and message logs, peer timestamps and, where permitted, socket and packet evidence. A TLS capture can show timing and connection behavior. Use authorized endpoint logs for FIX fields. Record host clock offset and compare local elapsed times before drawing cross-host latency conclusions.</p>
+            <pre aria-label="Example Linux and JVM diagnostic commands"><code>ss -tinp
+jcmd &lt;pid&gt; Thread.print
+jcmd &lt;pid&gt; JFR.start name=fix-incident settings=default duration=60s filename=/approved/path/fix-incident.jfr</code></pre>
+            <p>Compare TCP send or receive backlog with application queue age. Take thread samples for blocked callbacks and use JFR to look for pauses, allocation pressure, contention, and I/O around the first slow event. Use your on-call policy for production captures and restrict access to the artifacts. <a href="https://docs.oracle.com/en/java/javase/21/docs/specs/man/jcmd.html">JDK diagnostic command reference</a></p>
+          </details>
+          <p>Useful per-session signals include connected and recovery state, last RX/TX, heartbeat and timer lag, gaps and replay age, reject counts by reason, queue age, journal failures, and order reconciliation lag. Keep per-order IDs in searchable logs instead of metric labels. Alert on sustained lag and business uncertainty even while the socket is healthy.</p>
+        </section>
+
+        <section id="roles" class="chapter">
+          <h2>What employers mean by FIX experience</h2>
+          <p>A Java web developer already brings useful skills in validation, idempotency, distributed systems, and incident diagnosis. FIX roles ask for evidence that you can apply them to a shared, long-lived session where both firms keep counters, exchange asynchronous updates, and may disagree about whether an order executed. A single change can affect connectivity, venue certification, and live exposure at once.</p>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="FIX connectivity and engine engineering compared">
+            <table>
+              <thead><tr><th scope="col">Role</th><th scope="col">Work you own</th><th scope="col">Evidence to show</th></tr></thead>
+              <tbody>
+                <tr><td>Connectivity and onboarding</td><td>Configure and certify sessions, map venue dialects, support releases, resolve rejects and disconnects with external counterparties.</td><td>A venue-specific mapping, certification checklist with redacted traces, and an incident timeline with both sides’ sequence numbers.</td></tr>
+                <tr><td>Trading application engineering</td><td>Handle orders, replacements, partial fills, trade corrections, and reconciliation with the OMS and risk systems.</td><td>A state transition test with cancel/fill races and a duplicate replay that produces one fill.</td></tr>
+                <tr><td>Engine engineering</td><td>Own framing, session rules, journals, failover, backpressure, and latency across the stack.</td><td>A reproducible reconnect lab, a crash-consistency test matrix, and a benchmark with p99.9, saturation and recovery results.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>One example hiring brief asks for client certification, regression and deployment work, on-call support, and diagnosis from FIX messages and system logs. Job titles overlap. Read the duties to see where a team needs depth. <a href="https://broadridge.wd5.myworkdayjobs.com/en-US/careers/job/New-York-NY/Senior-FIX-Onboarding-Engineer--ON-SITE-_JR1087206">Broadridge FIX onboarding role</a></p>
+          <h3>Interview exercises</h3>
+          <details>
+            <summary>We sent an order and heard nothing. Can we retry?</summary>
+            <p>First identify whether the application accepted the command and whether a sequence and durable frame were assigned. Keep the original order identity. Recover the session, then reconcile through replay, approved order status or drop copy before deciding whether another submission is valid under the venue’s rules.</p>
+          </details>
+          <details>
+            <summary>Our parser got twice as fast. Why did p99.9 barely change?</summary>
+            <p>Time the full path under the same offered load. Check if storage commits, callback queues, network or scheduler delays dominate the tail. Verify that the load generator kept sending during pauses. An isolated codec win may have little effect on order-to-ack latency.</p>
+          </details>
+          <details>
+            <summary>How would you turn this lab into a portfolio project?</summary>
+            <p>For connectivity roles, build a venue profile and show what you do when the peer rejects an order, drops the connection, or recovers with a gap. For engine roles, combine the two labs by adding a transactional inbox to the wire path and injecting the checkpoint crash there. Show that the restarted process recovers E2 once. Include the failure timeline, the commands to reproduce it, and a load comparison with a stated durability boundary.</p>
+          </details>
+        </section>
+
+        <section id="sources" class="chapter sources">
+          <h2>Primary sources</h2>
+          <ul>
+            <li><a href="https://fixtrading.org/standards/technical-standards/">FIX Trading Community technical standards</a> and the <a href="https://fixtrading.org/standards/fixsession/">FIX session layer</a>.</li>
+            <li><a href="https://github.com/quickfix-j/quickfixj/releases/tag/QFJ_RELEASE_3_0_2">QuickFIX/J 3.0.2</a> and its <a href="https://quickfixj.org/docs/tutorials/">Java tutorials</a>.</li>
+            <li><a href="https://www.nyse.com/trade/pillar">NYSE Pillar venue specifications and operational resources</a>.</li>
+          </ul>
+        </section>
+      </article>
+    </div>
+  </main>
+  <footer class="shell footer"><a href="../../">← All Interactive Learning guides</a></footer>
+</body>
+</html>
