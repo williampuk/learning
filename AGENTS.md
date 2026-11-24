@@ -10,6 +10,18 @@ This repository is a static GitHub Pages site. The root `index.html` is the publ
 - Give each page a descriptive title, one main heading, and a clear learning objective. Use semantic HTML and make interactive controls usable with a keyboard. Verify the page at desktop and mobile widths.
 - Keep published pages usable on static hosting. If a topic uses a build step during development, its browser-ready entry point and assets must be available in the published folder.
 
+## Teach for beginners
+
+When creating or revising a topic, consider explanatory visuals, worked toy examples, and real-world examples. Choose the format and teaching aids based on the topic, what beginners are likely to find difficult, and the learning objective. Use existing pages as references. Adapt their ideas or invent new approaches when they would make the lesson clearer or give readers a better way to practice.
+
+- Start with a concrete question or use case. State what the reader should already know, link to prerequisite lessons where available, and define new terms and symbols when they first appear. Build intuition before introducing formulas or implementation details, and explain why each important step works.
+- When a toy example helps, carry one small, consistent example through the main ideas. Use inputs readers can work with by hand, show intermediate steps and expected results, and explain which assumptions or simplifications make it a toy example.
+- Illustrate practical use where it helps the lesson with a verified example, public test vector, or runnable demo. If the lesson uses a toy example, connect its inputs, steps, and outputs to the real application and explain what changes in practice. Link to relevant primary sources and verify worked outputs and runnable examples.
+- Choose visuals that reveal an important relationship or change, such as a labeled diagram, plot, table, or step-by-step trace. When experimenting helps, offer a working default, let readers vary a meaningful input, and show what changes and why. Provide a reset and a readable explanation or worked example that also works without JavaScript. Use clear labels and text cues alongside color.
+- Help readers check their understanding with prediction prompts, small exercises, hints, worked answers, or examples of common mistakes. Keep the main path easy to follow and make deeper derivations, extended examples, and reference material available as optional reading.
+
+See the exchange lab in the [ECDH guide](ecdh/index.html) for a step-by-step interactive example and the [Taproot guide](pay-to-taproot/index.html) for examples that carry through to real transactions.
+
 ## Maintain the directory
 
 Update or verify the root `index.html` in the same change whenever you add, revise, rename, or remove a topic.
