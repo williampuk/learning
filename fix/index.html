@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A hands-on introduction to the FIX protocol. Read a message, follow an order through fills and cancels, and recover a missing trade.">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#10121a">
+  <title>FIX Protocol, from the First Order</title>
+  <link rel="stylesheet" href="./lesson.css">
+  <script src="./lesson.mjs" type="module"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to lesson</a>
+  <header class="site-header">
+    <div class="shell">
+      <a href="../" class="home"><span aria-hidden="true">←</span> Interactive Learning</a>
+      <a href="#contents" class="contents-link">Contents <span aria-hidden="true">↓</span></a>
+    </div>
+  </header>
+  <main class="shell" id="main" tabindex="-1">
+    <section class="hero" aria-labelledby="title">
+      <div class="hero-copy">
+        <p class="subject">Trading systems · Beginner guide</p>
+        <h1 id="title">FIX Protocol, <em>from the First Order</em></h1>
+        <p class="intro">Your trading app sends a buy order for 100 shares. The broker buys 40. How does your app know what traded, what’s still open, and what happened while it was disconnected?</p>
+        <p class="prerequisites">No FIX or trading experience needed. By the end you’ll be able to read an order trace and tell whether a problem is in the FIX conversation or the trading app.</p>
+        <a class="primary" href="#first-order">Start with the order <span aria-hidden="true">↓</span></a>
+      </div>
+      <figure class="hero-flow">
+        <div class="flow-head"><span>Trading app</span><span>Broker gateway</span></div>
+        <ol class="flow-messages" role="list">
+          <li><span class="flow-direction">App → Broker</span><strong>Buy 100 ACME</strong><code>35=D</code></li>
+          <li><span class="flow-direction">Broker → App</span><strong>Order accepted</strong><code>35=8</code></li>
+          <li><span class="flow-direction">Broker → App</span><strong>40 shares traded</strong><code>35=8</code></li>
+        </ol>
+        <div class="flow-quantity">
+          <div class="quantity-bar" aria-hidden="true"><span style="--share: 40%"></span><span style="--share: 60%"></span></div>
+          <div class="quantity-key"><span><strong>40</strong> filled</span><span><strong>60</strong> open</span></div>
+        </div>
+        <figcaption>Order C42 · Fictional equity example</figcaption>
+      </figure>
+    </section>
+
+    <div class="lesson-layout">
+      <nav id="contents" class="contents" aria-label="Lesson contents">
+        <p>On this page</p>
+        <ol>
+          <li><a href="#first-order">Place a first order</a></li>
+          <li><a href="#wire">Read a FIX message</a></li>
+          <li><a href="#orders">Follow fills and cancels</a></li>
+          <li><a href="#sessions">Recover a missing fill</a></li>
+          <li><a href="#venue">Read a venue spec</a></li>
+          <li><a href="#beyond">Explore other workflows</a></li>
+          <li><a href="#practice">Practice and continue</a></li>
+        </ol>
+      </nav>
+
+      <article class="chapters" aria-label="FIX tutorial">
+        <section class="chapter" id="first-order">
+          <h2>Place a first order</h2>
+          <p><strong>Financial Information eXchange (FIX)</strong> is an open standard for exchanging trading messages. It gives independent systems a common vocabulary for instructions like “buy these shares” and events like “40 shares traded.” Here the trading app sends an <strong>order</strong>, an instruction to buy or sell, to a broker. The broker checks it and can route it to a <strong>venue</strong>, such as an exchange, where buyers and sellers meet. Firms can also connect directly to a venue. Each connection can have its own identifiers and rules. <a href="https://fixtrading.org/standards/fix-protocol/">FIX Trading Community overview</a>.</p>
+          <figure class="diagram">
+            <ol class="route" role="list">
+              <li><strong>Trading app</strong><small>Creates and tracks C42</small></li>
+              <li class="route-arrow"><span aria-hidden="true">⇄</span><small>FIX link</small></li>
+              <li><strong>Broker gateway</strong><small>Checks and routes orders</small></li>
+              <li class="route-arrow"><span aria-hidden="true">⇄</span><small>Venue link</small></li>
+              <li><strong>Venue</strong><small>Matches buy and sell orders</small></li>
+            </ol>
+            <figcaption>Two links, with the tutorial focused on the app-to-broker link. A venue may offer FIX or another protocol on its link.</figcaption>
+          </figure>
+          <p>Our order <code>C42</code> is a <strong>day limit buy</strong> for 100 shares of fictional ACME stock. A share is a unit of ownership in a company. The <strong>limit</strong> of $25.00 is the most we’ll pay per share. The <strong>time in force</strong> is Day, so any unfilled part expires at the end of the applicable trading session. A market order generally seeks an immediate trade at available prices and carries no specified limit price.</p>
+          <p>An <strong>order book</strong> records orders waiting to trade. A <strong>bid</strong> is an offer to buy, and an <strong>offer</strong> (also called an ask) is an offer to sell. Here’s the sell side just before C42 arrives.</p>
+          <figure class="diagram book">
+            <div>
+              <table>
+                <caption>ACME · Example sell offers</caption>
+                <thead><tr><th scope="col">Price</th><th scope="col">Available</th><th scope="col">Eligible at $25?</th></tr></thead>
+                <tbody>
+                  <tr><td>$24.90</td><td>40 shares</td><td>Yes</td></tr>
+                  <tr><td>$25.10</td><td>60 shares</td><td>Above limit</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>The buy can take 40 shares at $24.90, for $996 before fees. That trade is a <strong>fill</strong>. The other offer is too expensive, so the remaining 60 shares can stay <strong>open</strong> at $25.00 and trade when suitable sellers arrive. This example uses the price of the order already in the book. Matching and priority rules depend on the venue.</p>
+          </figure>
+          <details>
+            <summary>What if I want the shares right away?</summary>
+            <p>With <strong>Immediate or Cancel</strong> (<code>59=3</code>), C42 could fill the 40 available now and cancel the remaining 60. With <strong>Fill or Kill</strong> (<code>59=4</code>), all 100 would have to be available immediately at $25.00 or better. With only 40 available, nothing would trade. Both instructions can use a limit price where supported. The venue’s order types and time-in-force rules determine which combinations are allowed. <a href="https://www.fixtrading.org/wp-content/uploads/download-manager-files/FIX-Latest-Specification-Trade.pdf">FIX trade specification, New Order Single</a>.</p>
+          </details>
+          <div class="distinction">
+            <div><h3>Session messages</h3><p>Open, monitor, synchronize, and close the conversation. Examples include Logon and Heartbeat.</p></div>
+            <div><h3>Application messages</h3><p>Carry trading instructions and events. Examples include New Order Single and Execution Report.</p></div>
+          </div>
+          <p>A <strong>FIX engine</strong> typically handles encoding, validation and session mechanics. The trading application decides what orders to send and how to update its order ledger. The matching engine at a venue determines which orders trade.</p>
+        </section>
+
+        <section class="chapter" id="wire">
+          <h2>Read a FIX message</h2>
+          <p>This lesson uses the <strong>TagValue</strong> encoding. Each field is a <code>tag=value</code> pair. Start with <code>35=D</code>. Tag <code>35</code> is <strong>MsgType</strong>, and <code>D</code> means New Order Single. Then find <code>11=C42</code> for the client’s order identifier and <code>34=2</code> for the message’s place in the sender’s stream.</p>
+          <figure class="diagram wire">
+            <div class="panel-heading"><h3>Inspect the first order</h3><span class="mono-label">FIX 4.4 · TagValue</span></div>
+            <p class="muted">On the wire, each field ends with one invisible byte called Start of Heading (SOH, <code>0x01</code>). In printed FIX logs you’ll often see <code>|</code> in its place. Line wraps here are for readability.</p>
+            <pre id="wire-example"><code>8=FIX.4.4|9=126|35=D|49=CLIENT|56=BROKER|34=2|
+52=20261124-14:30:01.000|11=C42|55=ACME|54=1|
+60=20261124-14:30:01.000|38=100|40=2|44=25.00|59=0|10=171|</code></pre>
+            <div id="wire-lab" hidden>
+              <p class="lab-note wire-prompt">Select a field to decode it.</p>
+              <div id="field-readout" class="readout" role="status" aria-atomic="true"></div>
+              <div class="wire-edit">
+                <label for="wire-edit">Edit the price without updating tags 9 or 10</label>
+                <select id="wire-edit">
+                  <option value="25.00">Original · 25.00</option>
+                  <option value="26.00">Change one digit · 26.00</option>
+                  <option value="25.000">Add one digit · 25.000</option>
+                </select>
+                <p class="lab-note">Predict which checks will fail. The extra zero leaves the dollar amount unchanged.</p>
+              </div>
+              <div class="wire-checks" id="wire-checks" role="status" aria-atomic="true"></div>
+              <div class="controls wire-controls">
+                <button id="show-soh" type="button" aria-pressed="false">Show SOH markers</button>
+                <button id="reset-wire" type="button" class="secondary">Reset</button>
+              </div>
+            </div>
+            <figcaption>The message has a standard header, an order body and a checksum trailer. The field guide below follows that order.</figcaption>
+          </figure>
+          <div class="table-wrap">
+            <table>
+              <caption>Read the order from left to right</caption>
+              <thead><tr><th scope="col">Part</th><th scope="col">What to look for</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Header</th><td><code>8</code> version, <code>9</code> body length, <code>35</code> message type, <code>49</code>/<code>56</code> sender/target, <code>34</code> sequence number, <code>52</code> sending time (UTC).</td></tr>
+                <tr><th scope="row">Body</th><td><code>11=C42</code> client order ID, <code>55=ACME</code> symbol, <code>54=1</code> buy side, <code>60</code> transaction time (UTC), <code>38=100</code> quantity, <code>40=2</code> limit order, <code>44=25.00</code> limit price, <code>59=0</code> day.</td></tr>
+                <tr><th scope="row">Trailer</th><td><code>10=171</code> checksum, followed by one final SOH.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <details>
+            <summary>How do you get 126 and 171?</summary>
+            <figure class="diagram frame">
+              <div class="frame-segments">
+                <div><code>8=…|9=126|</code><strong>16 bytes</strong></div>
+                <div><code>35=D|…59=0|</code><strong>126 bytes</strong></div>
+                <div><code>10=171|</code><strong>7 bytes</strong></div>
+              </div>
+              <figcaption>C42 on the wire. Each <code>|</code> stands for one SOH byte, including the final delimiter of each segment.</figcaption>
+            </figure>
+            <p><strong>BodyLength</strong> counts only the middle segment, starting at <code>35=</code> and stopping just before <code>10=</code>. It includes the header fields from <code>35</code> onward as well as the order fields. <strong>CheckSum</strong> sums the byte values of the first two segments, then takes the remainder after dividing by 256 and pads to three digits. Here the sum is 7,083 and the remainder is 171. A printable pipe has a different byte value from SOH.</p>
+            <p>With <code>44=26.00</code>, the length stays 126 and the checksum becomes 172. With <code>44=25.000</code>, the body grows to 127 and the checksum becomes 219 while tag <code>9</code> still says 126. To encode an edited message, write the new length first, then calculate the checksum over the updated header and body. <a href="https://fixtrading.org/packages/fix-tagvalue-encoding/">FIX TagValue Encoding Standard</a>.</p>
+          </details>
+          <details>
+            <summary>How does the engine find where a message ends?</summary>
+            <p>TCP delivers an ordered stream of bytes. A single read might return half of C42’s message, or all of C42 plus the beginning of the next message. After reading <code>8</code> and <code>9</code>, the engine can wait for the indicated number of bytes and look for the checksum trailer at that boundary. Once it has a complete frame, the engine can validate it and continue with any leftover bytes. For field parsing, some data fields can contain SOH themselves, so the decoder uses their companion length fields. <a href="https://fixtrading.org/packages/fix-tagvalue-encoding/">FIX TagValue Encoding Standard</a>.</p>
+          </details>
+          <details>
+            <summary>Why can the same tag appear twice?</summary>
+            <p id="repeating-groups">A <strong>repeating group</strong> encodes a list of structured entries. This excerpt from a market data snapshot declares two entries with <code>268=2</code>. Each starts with <code>269</code> and has its own price and size.</p>
+            <pre><code>268=2|269=0|270=24.80|271=200|269=1|270=24.90|271=40|</code></pre>
+            <p>Entry one is a bid for 200 at $24.80. Entry two is an offer of 40 at $24.90. A parser needs the message dictionary to recognize the group and entry boundaries. A flat map with one value per tag would lose the bid.</p>
+          </details>
+        </section>
+
+        <section class="chapter" id="orders">
+          <h2>Follow fills and cancels</h2>
+          <p>A single order can produce several messages over time. The broker uses an <strong>Execution Report</strong> (<code>35=8</code>) to acknowledge the order, report trades and communicate other changes. In these FIX 4.4 examples, <strong>ExecType</strong> (<code>150</code>) tells you <em>why this report was sent</em> and <strong>OrdStatus</strong> (<code>39</code>) tells you <em>the reported order state</em>. A new acknowledgement has <code>150=0</code> and <code>39=0</code>. A trade has <code>150=F</code>, with <code>39=1</code> for Partially Filled or <code>39=2</code> for Filled in the ordinary fill path.</p>
+          <div class="diagram order-lab" id="order-lab" hidden>
+            <div class="panel-heading"><h3>Walk through order C42</h3><span class="mono-label">FIX 4.4</span></div>
+            <label for="order-scenario">Choose what happens next</label>
+            <select id="order-scenario">
+              <option value="fill">The order fills in two trades</option>
+              <option value="cancel">Cancel the remaining 60</option>
+              <option value="race">The fill beats the cancel</option>
+              <option value="replace">Reduce the total order to 80</option>
+              <option value="reject">The broker rejects the order</option>
+            </select>
+            <div class="step-counter" id="order-step"></div>
+            <div class="event">
+              <p class="event-route" id="order-direction"></p>
+              <h4 id="order-event"></h4>
+              <pre><code id="order-tags"></code></pre>
+              <p id="order-explanation"></p>
+            </div>
+            <div class="order-visual">
+              <p id="order-state"></p>
+              <div class="quantity-bar" id="order-bar" aria-hidden="true"></div>
+              <dl id="order-quantities" class="quantity-stats"></dl>
+            </div>
+            <div class="controls">
+              <button id="order-next" type="button">Next event</button>
+              <button id="order-prev" type="button" class="secondary">Previous</button>
+              <button id="order-reset" type="button" class="secondary">Reset</button>
+            </div>
+            <p id="order-announcement" class="sr-only" role="status" aria-atomic="true"></p>
+            <p class="lab-note">Selected fields only. Quantities show the trading app’s view at each step.</p>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <caption>Worked example · two trades complete C42</caption>
+              <thead><tr><th scope="col">Event</th><th scope="col">Last trade <code>32</code>/<code>31</code></th><th scope="col">Filled <code>14</code></th><th scope="col">Open <code>151</code></th><th scope="col">Avg price <code>6</code></th></tr></thead>
+              <tbody>
+                <tr><th scope="row">New</th><td>—</td><td>0</td><td>100</td><td>—</td></tr>
+                <tr><th scope="row">Partial fill</th><td>40 @ $24.90</td><td>40</td><td>60</td><td>$24.90</td></tr>
+                <tr><th scope="row">Final fill</th><td>60 @ $25.00</td><td>100</td><td>0</td><td>$24.96</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p><strong>LastQty</strong> (<code>32</code>) is this trade’s size. <strong>CumQty</strong> (<code>14</code>) is filled so far. <strong>LeavesQty</strong> (<code>151</code>) is still open for execution. The second fill brings the total to <code>40 + 60 = 100</code>. The weighted average is <code>(40 × $24.90 + 60 × $25.00) / 100 = $24.96</code>. On cancellation after 40 traded, CumQty stays 40 and LeavesQty becomes 0 because the other 60 can no longer trade.</p>
+          <details>
+            <summary>Which identifier follows what?</summary>
+            <p><code>11=ClOrdID</code> is assigned by the client to a request. <code>37=OrderID</code> comes from the broker or venue. <code>17=ExecID</code> identifies a report in the sender’s applicable scope. Those scopes and any stability across updates or feeds come from the counterparty spec. <code>34=MsgSeqNum</code> belongs to one direction of the session and advances across orders and admin messages.</p>
+            <p>A cancel (<code>35=F</code>) or replace (<code>35=G</code>) gets its own new ClOrdID and uses <code>41=OrigClOrdID</code> to reference the order being changed. After a successful replace from <code>C42</code> to <code>C42-R1</code>, a later cancel in this flow references <code>C42-R1</code>. Follow the venue’s rules for overlapping requests and identifier scope.</p>
+          </details>
+          <details>
+            <summary>What if an order fills while a cancel is pending?</summary>
+            <p>In the illustrated race, the cancel carries <code>11=C42-C1</code> and <code>41=C42</code>. The broker reports <code>150=6</code> (Pending Cancel). A final 60 shares trade before the cancel takes effect. The trade report can carry <code>150=F</code> and still show <code>39=6</code> because Pending Cancel takes precedence in this flow. A Cancel Reject (<code>35=9</code>) with <code>39=2</code> then confirms the order is Filled. An accepted cancel would instead yield an execution report with <code>150=4</code> and <code>39=4</code>. <a href="https://www.fixtrading.org/wp-content/uploads/download-manager-files/FIX-Latest-as-of-EP284-Order-State-Changes.pdf">FIX order state matrices, B.1</a>.</p>
+          </details>
+          <details>
+            <summary>What if the price on an earlier fill was wrong?</summary>
+            <p>After C42 fills, suppose the broker corrects the first 40-share trade, <code>E1</code>, from $24.90 to $24.80. The correction has its own report ID (<code>17=E6</code>) and refers to the earlier report with <code>19=E1</code> (<strong>ExecRefID</strong>).</p>
+            <pre><code>35=8|17=E6|19=E1|150=G|39=2|32=40|31=24.80|14=100|151=0|6=24.92|</code></pre>
+            <p><code>150=G</code> means Trade Correct. Update the earlier execution and keep C42 at 100 filled, with the new weighted average <code>(40 × $24.80 + 60 × $25.00) / 100 = $24.92</code>. A Trade Cancel (<code>150=H</code>, also called a bust) reverses a referenced execution. An order cancel closes the quantity still open for trading. Check the counterparty’s rules for how corrections and busts are reported. <a href="https://www.fixtrading.org/wp-content/uploads/download-manager-files/FIX-Latest-Specification-Trade.pdf">FIX trade specification, Execution Report</a>.</p>
+          </details>
+          <details>
+            <summary>How do I tell reject messages apart?</summary>
+            <ul>
+              <li><code>35=3</code> <strong>Session Reject</strong> can flag a protocol violation, such as an invalid tag value. Look for <code>45</code> (reference sequence number), <code>371</code> (reference tag) and <code>373</code> (session reject reason) when present.</li>
+              <li><code>35=8</code> with <code>150=8</code> and <code>39=8</code> reports a rejected new order in this model, for example when it fails the broker’s pre-trade checks. Check <code>103</code> and <code>58</code> when present.</li>
+              <li><code>35=9</code> <strong>Order Cancel Reject</strong> rejects a cancel or replace request and reports the order’s current status. Check <code>434</code> for which request type and <code>102</code> for the reason when provided.</li>
+              <li><code>35=j</code> <strong>Business Message Reject</strong> covers application messages for which a more specific rejection mechanism doesn’t apply. One example is an unsupported application message type under the agreed profile. <a href="https://archive.fixtrading.org/online-specification/business-area-trade/">FIX application trade specification</a>.</li>
+            </ul>
+          </details>
+        </section>
+
+        <section class="chapter" id="sessions">
+          <h2>Recover a missing fill</h2>
+          <p>A <strong>FIX session</strong> is a numbered conversation between two systems. The <strong>initiator</strong> (here the trading app) opens a network connection to the <strong>acceptor</strong> (the broker) and sends Logon (<code>35=A</code>). The broker acknowledges with its own Logon. Once synchronized, either side can send messages, including a fill that arrives minutes after the order. When idle, they use Heartbeat (<code>35=0</code>) at the agreed interval (<code>108</code>). A Test Request (<code>35=1</code>) asks for a heartbeat echoing its <code>112=TestReqID</code>. Logout (<code>35=5</code>) closes a connection cleanly when possible.</p>
+          <figure class="diagram sequences">
+            <div class="sequence-line"><strong>App → Broker</strong><ol role="list"><li><b>1</b> Logon</li><li><b>2</b> New order</li></ol></div>
+            <div class="sequence-line"><strong>Broker → App</strong><ol role="list"><li><b>1</b> Logon</li><li><b>2</b> Accepted</li><li><b>3</b> 40 traded</li></ol></div>
+            <figcaption>Each direction has its own sequence numbers. After these events, the app’s next outgoing number is 3 and its next expected broker number is 4. Administrative messages also take slots in these streams.</figcaption>
+          </figure>
+          <p>A FIX session can continue on a new TCP connection. Both sides track the next number to send and the next one to expect. They can retain those counters and a store of messages so they can continue after reconnecting. In this example, the broker sent the final fill at sequence 4 and a heartbeat at 5 before the break. The app processed through 3, so it still expects 4. The peers continue with their existing counters.</p>
+          <div id="recovery-lab" class="diagram recovery-lab" hidden>
+            <div class="panel-heading"><h3>Step through the reconnect</h3><span class="mono-label" id="recovery-step"></span></div>
+            <dl id="recovery-state" class="recovery-state"></dl>
+            <div class="controls">
+              <button id="recovery-next" type="button">Next event</button>
+              <button id="recovery-prev" type="button" class="secondary">Previous</button>
+              <button id="recovery-reset" type="button" class="secondary">Reset</button>
+            </div>
+            <ol id="recovery-events" class="recovery-events" role="list" aria-label="Recovery messages in order"></ol>
+            <p id="recovery-announcement" class="sr-only" role="status" aria-atomic="true"></p>
+            <p class="lab-note">Selected message fields. Counters and quantities are from the app’s point of view.</p>
+          </div>
+          <ol class="recovery-static">
+            <li><strong>Spot the gap.</strong> The app reconnects with Logon <code>34=3</code>. The broker replies with Logon <code>34=6</code>. The app sees 6 while expecting 4.</li>
+            <li><strong>Ask for 4 onward.</strong> The app sends <code>35=2|34=4|7=4|16=0|</code>. The <code>34=4</code> is the app’s own sequence, <code>7=4</code> starts the range in the broker’s stream, and <code>16=0</code> leaves that range open-ended.</li>
+            <li><strong>Replay the trade.</strong> The broker retransmits the report at its original <code>34=4</code> with <code>43=Y</code> (Possible Duplicate) and <code>122</code> (original sending time). The app records the previously unseen 60 shares once and now expects 5.</li>
+            <li><strong>Skip the admin messages in that range.</strong> A Sequence Reset in Gap Fill mode (<code>35=4|34=5|43=Y|123=Y|36=7|</code>) covers the old heartbeat at 5 and the Logon already received at 6. The next expected live broker message is 7.</li>
+          </ol>
+          <p><code>43=Y</code> means the application may have handled the report before. Establish whether it has already applied the business event using the agreed identifiers and their scope. A count of 100 shares stays 100 if the same trade arrives again. Gap Fill advances the session counter past a skipped range. When a missing business event cannot be recovered from the stream, reconcile through the counterparty’s supported sources. Reset-mode Sequence Reset and a mutually agreed session reset are separate procedures. <a href="https://fixtrading.org/standards/fixsession/">FIX Session Layer standard</a>.</p>
+          <details>
+            <summary>What if the connection drops before I get an order acknowledgement?</summary>
+            <p>Suppose the app sends C42, then disconnects before seeing any response. The order could already be working or filled. Recover the session and check the existing order through the counterparty’s supported status or reconciliation procedure. A fresh buy with a new order ID could leave you with two orders. A disconnect can trigger automatic cancellation on some connections, subject to configured scope and exclusions. <a href="https://www.nyse.com/publicdocs/nyse/NYSE_Pillar_Gateway_FIX_Protocol_Specification.pdf">NYSE Pillar options for Cancel on Disconnect in Logon</a>.</p>
+            <p>If the counterparty supports an <strong>application resend</strong>, it consumes a new <code>34</code> and follows agreed rules for the business identifier and optional <code>97=Y</code> (PossResend). In a <strong>session retransmission</strong>, the sender reuses the original <code>34</code> with <code>43=Y</code>. The recovery lab shows the latter. <a href="https://www.fixtrading.org/wp-content/uploads/download-manager-files/FIX_Session_Layer_June_2020.pdf">FIX Session Layer, §4.9</a>.</p>
+          </details>
+        </section>
+
+        <section class="chapter" id="venue">
+          <h2>Read a real venue specification</h2>
+          <p>A <strong>counterparty</strong> is the firm or venue on the other side of your FIX link. Its <strong>rules of engagement</strong> tell you which version and conventions it supports, how to connect, what fields are required and how orders behave. A <strong>data dictionary</strong> describes allowed messages, field types, values and groups. Workflow rules can go beyond what a dictionary can validate, such as when a request may be retried and how long executions can be recovered. <a href="https://fixtrading.org/standards/orchestra/">FIX Trading Community on machine-readable rules of engagement</a>.</p>
+          <div class="diagram">
+            <div class="panel-heading"><h3>NYSE Pillar Equities FIX Gateway</h3><span class="mono-label">Public spec · §7 and §8.5</span></div>
+            <p>Find the Execution Report section and compare it to the lesson’s FIX 4.4 example. Both use <code>35=8</code>. Pillar uses a FIX 4.2 profile with additional exchange-specific rules. Its message tables also show which fields are required in all cases, which are conditional, and which apply only to particular exchanges.</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th scope="col">Question</th><th scope="col">This FIX 4.4 lesson</th><th scope="col">NYSE Pillar profile</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row">What starts the message?</th><td><code>8=FIX.4.4</code></td><td><code>8=FIX.4.2</code></td></tr>
+                  <tr><th scope="row">What does a trade report use?</th><td><code>150=F</code> for both fills. <code>39</code> reports the state.</td><td><code>150=1</code> for a partial fill and <code>150=2</code> for a fill. The report also has <code>20=0</code> for a new fill event.</td></tr>
+                  <tr><th scope="row">What do <code>32</code> and <code>14</code> mean?</th><td>Most recent fill quantity and cumulative filled quantity.</td><td>The same distinction. The spec also defines each field’s allowed values and when it is sent.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p><a href="https://www.nyse.com/publicdocs/nyse/NYSE_Pillar_Gateway_FIX_Protocol_Specification.pdf">Open the NYSE Pillar FIX Gateway specification (PDF)</a></p>
+          </div>
+          <details>
+            <summary>Try the same partial fill in Pillar’s profile</summary>
+            <p>Here is the 40-share trade expressed with selected fields from Pillar’s Execution Report table. The values are illustrative.</p>
+            <pre><code>35=8|20=0|39=1|150=1|31=24.90|32=40|14=40|151=60|</code></pre>
+            <p>Read <code>20=0</code> and <code>150=1</code> together for the partial-fill event. <code>39=1</code> says the order is partially filled, <code>32=40</code> says 40 shares traded on this report, and <code>151=60</code> says 60 remain open. A decoder looking only for <code>150=F</code> would miss this fill.</p>
+          </details>
+          <p>When reading a spec, start with its <strong>session rules</strong> (IDs, version, credentials, schedule and recovery). Next read the <strong>message tables</strong> for one complete workflow, including rejects and conditional fields. Finally, check <strong>certification scenarios</strong> with the counterparty’s test environment and assert both the messages and the resulting order state. For a cancel test, verify the final open quantity and whether any fill arrived while the cancel was pending.</p>
+          <details>
+            <summary>Where do FIXT.1.1, TLS and FIX Latest fit?</summary>
+            <p><code>FIX.4.4</code> here identifies the session profile and application version. With <code>FIXT.1.1</code>, the session protocol is versioned independently. Logon can carry <code>1137=DefaultApplVerID</code> to declare the default application version, for example <code>9</code> for FIX 5.0 SP2. FIX Latest evolves through extension packs. Read the negotiated application profile and venue extensions before decoding business fields. <a href="https://fixtrading.org/standards/fixsession/">FIX Session and FIXT specifications</a>.</p>
+            <p>TLS protects the network link. FIX-over-TLS (FIXS) describes interoperable ways to secure FIX sessions, including options for client authentication at the FIX session layer. Use the counterparty’s test endpoints and credential rules, and redact sensitive logon data from shared traces. <a href="https://fixtrading.org/standards/fixs/">FIX-over-TLS standard</a>.</p>
+          </details>
+        </section>
+
+        <section class="chapter" id="beyond">
+          <h2>Explore other FIX workflows</h2>
+          <p>Order entry tells you what happened to <em>your order</em>. The same protocol family can also describe the market around the order, a dealer’s price for a proposed trade, or what happens after execution. Counterparties often put these workflows on separate interfaces with separate state and recovery rules.</p>
+          <div class="workflow-list">
+            <details open>
+              <summary>Market data · What can I buy or sell?</summary>
+              <p>In a FIX snapshot-and-updates feed, a Market Data Request (<code>35=V</code>) can subscribe to a symbol. A Snapshot (<code>35=W</code>) gives a full view of the subscribed portion of the book, such as the best five prices on each side. It can carry bids and offers in a <a href="#repeating-groups">repeating group</a>. An Incremental Refresh (<code>35=X</code>) can add, change or remove individual entries while the other entries stay in place.</p>
+              <div class="market-example">
+                <div><strong>Snapshot</strong><span>Offer $24.90 × 40</span><span>Offer $25.10 × 60</span></div>
+                <div><strong>Incremental change</strong><span>Remove $24.90 offer</span></div>
+                <div><strong>Updated view</strong><span>Best offer $25.10 × 60</span></div>
+              </div>
+              <p>A vanished offer can result from trades or canceled interest. Look to your own execution reports to confirm your fill. If you miss a required update, re-establish the book from an appropriate snapshot and correctly sequenced updates per the feed spec. <a href="https://www.fixtrading.org/wp-content/uploads/download-manager-files/MDOWG_Book_Mgt-v20.pdf">FIX recommended practices for book management</a>.</p>
+            </details>
+            <details>
+              <summary>RFQ · What price will a dealer quote me?</summary>
+              <p>In a <strong>request for quote</strong> workflow, a client may ask a dealer for a price on a specific instrument and quantity (<code>35=R</code>). A Quote (<code>35=S</code>) can carry a price, size and quote identifier. How to accept, expiry and whether a quote is firm depend on the agreed workflow. For example, ask for a price on a specific size of a bond and use the returned quote ID if the venue requires it for acceptance. <a href="https://archive.fixtrading.org/online-specification/business-area-trade/">FIX trade and quote workflows</a>.</p>
+            </details>
+            <details>
+              <summary>Drop copy and post-trade · What gets booked?</summary>
+              <p><strong>Drop copy</strong> is a separate stream that can deliver copies of order or execution events to risk and reconciliation systems. NYSE Pillar can deliver copies of activity from its binary order gateway over a separate FIX interface. The configured scope can cover fills only or a broader set of order events. <a href="https://beta.nyse.com/publicdocs/nyse/NYSE_Pillar_Gateway_Binary_Protocol_Specification.pdf">NYSE Pillar Binary Gateway specification, §7.4</a>.</p>
+              <p>A Trade Capture Report (<code>AE</code>) describes a trade under the applicable trade-reporting workflow. After C42 fills, a manager could allocate 70 shares to one account and 30 to another at the agreed average price. Allocation Instruction (<code>J</code>) and its acknowledgement (<code>P</code>) are examples. An account-level Confirmation (<code>AK</code>) can communicate the agreed terms, and Confirmation Ack (<code>AU</code>) can affirm or reject them. Settlement is the later exchange of securities and cash. <a href="https://www.fixtrading.org/wp-content/uploads/download-manager-files/FIX-Latest-Specification-PostTrade.pdf">FIX post-trade specification</a>.</p>
+            </details>
+            <details>
+              <summary>Risk and order management · What can be sent or canceled?</summary>
+              <p>Pre-trade checks can block an order that exceeds permitted size, price or exposure before routing. A status request (<code>H</code>) can ask for a particular order’s state where supported. Mass cancel (<code>q</code>) can request cancellation of a specified scope where supported. Verify the scope and individual outcomes before treating open orders as canceled. An order router can choose among venues and track the venue orders it creates. <a href="https://archive.fixtrading.org/online-specification/business-area-trade/">FIX order-handling messages</a>.</p>
+            </details>
+          </div>
+        </section>
+
+        <section class="chapter" id="practice">
+          <h2>Practice and continue</h2>
+          <p>Try each prompt before opening the answer. The fields are selected excerpts from the walkthroughs.</p>
+          <div class="workflow-list">
+            <details>
+              <summary><code>35=8|150=0|39=0|14=0|151=100|</code> Did anything trade?</summary>
+              <p>No. The New execution report acknowledges that the order is working. Filled quantity is 0 and 100 shares can still trade.</p>
+            </details>
+            <details>
+              <summary>C42 filled 40 shares. A replace asks for total quantity 80 and succeeds. How many are open?</summary>
+              <p>40 shares. In this example the replacement quantity is the new total. The 40 already filled remain part of that total. Check the replace acknowledgement before updating the order’s working size.</p>
+            </details>
+            <details>
+              <summary>Your app expects <code>34=4</code> from the broker. Its own next outgoing number is 11. The broker sends 6. Which numbers go in an open-ended resend request?</summary>
+              <p><code>34=11</code> is the app’s next outgoing sequence. <code>7=4|16=0|</code> asks for messages from 4 onward in the broker’s separate stream. A finite request for just the missing range would use <code>16=5</code> where supported.</p>
+            </details>
+            <details>
+              <summary>The last report says Filled and arrives again with <code>43=Y</code>. What do you check?</summary>
+              <p>Check whether the business event was already applied, according to the counterparty’s execution identifiers and your ledger. If it was, quantities stay the same. If the application never applied it, process the recovered event according to that workflow.</p>
+            </details>
+          </div>
+          <section class="diagram incident" aria-labelledby="incident-title">
+            <div class="panel-heading"><h3 id="incident-title">Investigate a stale order screen</h3></div>
+            <p>In this variation of the reconnect, the FIX engine reports that recovery finished. The order screen still shows 40 filled. Compare three pieces of evidence from the same session.</p>
+            <div class="trace-sources">
+              <div><strong>Engine event log</strong><span>Recovery complete. Next broker sequence is 7.</span></div>
+              <div><strong>Application ledger</strong><span>C42 has 40 filled. Last applied execution is E1.</span></div>
+            </div>
+            <figure class="trace">
+              <figcaption>Incoming FIX log · Full synthetic frame, with pipes for SOH</figcaption>
+              <pre id="replayed-frame"><code>8=FIX.4.4|9=208|35=8|49=BROKER|56=CLIENT|34=4|43=Y|
+52=20261124-14:31:04.000|122=20261124-14:30:04.000|
+37=B510|11=C42|17=E2|150=F|39=2|55=ACME|54=1|
+38=100|44=25.00|32=60|31=25.00|151=0|14=100|6=24.96|
+60=20261124-14:30:04.000|10=202|</code></pre>
+            </figure>
+            <details>
+              <summary>What does the broker report, and what would you check next?</summary>
+              <ol>
+                <li><strong>Identify the order and event.</strong> <code>11=C42</code> and <code>37=B510</code> tie the report to the order. <code>17=E2</code> identifies the report. <code>32=60</code>, <code>14=100</code> and <code>151=0</code> say the last 60 traded, for 100 filled and zero open.</li>
+                <li><strong>Check both timelines.</strong> The engine advanced to 7 after the gap. The application ledger still shows E1. <code>43=Y</code> marks E2 as a replay at its original sequence 4. Tag <code>122</code> gives the original sending time, one minute earlier than the replay’s <code>52</code>.</li>
+                <li><strong>Trace E2 into the ledger.</strong> Check validation, delivery to the order handler, duplicate detection and whether the write committed. If E2 was applied, check how the screen reads that state. Confirm the broker’s current order and execution state through the agreed reconciliation channel before repairing local state or deciding whether another order is needed.</li>
+              </ol>
+            </details>
+          </section>
+          <aside class="next-lesson">
+            <h3>Take the next step in Java</h3>
+            <p>Run an order on a real loopback FIX session, force a disconnect, and inspect the recovered trade. The Java guide builds on this lesson and goes deeper on engine design, performance and production debugging.</p>
+            <a href="../fix-engine/fix-engine-java/">Building a FIX Engine in Java <span aria-hidden="true">→</span></a>
+          </aside>
+        </section>
+      </article>
+    </div>
+  </main>
+  <footer class="shell site-footer"><a href="../">← All lessons</a><a href="#main">Back to top ↑</a></footer>
+</body>
+</html>
