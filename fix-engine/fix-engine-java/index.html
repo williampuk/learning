@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#10121a">
-  <meta name="description" content="A practical Java guide to building, benchmarking, and operating a FIX engine, with a runnable QuickFIX/J recovery lab.">
+  <meta name="description" content="Build, benchmark and troubleshoot FIX connectivity with runnable QuickFIX/J labs for orders, recovery, market data and post-trade workflows.">
   <title>Building a FIX Engine in Java</title>
   <link rel="stylesheet" href="./lesson.css">
   <script type="module" src="./lesson.mjs"></script>
@@ -41,14 +41,15 @@
 
     <div class="shell layout">
       <nav class="outline" aria-label="Guide sections">
-        <a href="#architecture">Architecture</a><a href="#recovery">Recovery walkthrough</a><a href="#java">Build in Java</a><a href="#checkpoint">Crash lab</a>
-        <a href="#performance">Performance</a><a href="#operations">Production debugging</a>
+        <a href="#architecture">Architecture</a><a href="#first-java">First Java connection</a><a href="#recovery">Recovery walkthrough</a><a href="#java">Build the engine</a>
+        <a href="#checkpoint">Crash lab</a><a href="#application-labs">Trading workflows</a><a href="#session-profiles">Session profiles</a>
+        <a href="#performance">Performance</a><a href="#operations">Production debugging</a><a href="#certification">Certification</a>
         <a href="#roles">FIX roles</a><a href="#sources">Sources</a>
       </nav>
       <article class="lesson">
         <section id="architecture" class="chapter">
           <h2>Give each layer one job</h2>
-          <p>You should already know FIX Logon, Heartbeat, ResendRequest, the order lifecycle, and basic Java. We’ll use classic tag-value FIX 4.4 over TCP, with a broker acting as the <strong>initiator</strong> and a simulated venue as the <strong>acceptor</strong>.</p>
+          <p>You should already know FIX Logon, Heartbeat, ResendRequest, the order lifecycle, and basic Java. The <a href="../../fix/">beginner FIX tutorial</a> covers that protocol background. The recovery fixture uses classic TagValue FIX 4.4 over TCP, with a broker acting as the <strong>initiator</strong> and a simulated venue as the <strong>acceptor</strong>.</p>
           <ol class="pipeline" role="list" aria-label="Inbound execution report path">
             <li><strong>Socket</strong><span>TCP bytes, TLS in production</span></li>
             <li><strong>Framer</strong><span>Complete message and checksum</span></li>
@@ -68,9 +69,29 @@
           </aside>
         </section>
 
+        <section id="first-java" class="chapter">
+          <h2>Open a Java connection and send one order</h2>
+          <p>Download or clone the site source, then change into the lab directory. Compile once in the first terminal, start the acceptor, and start the initiator in the second terminal within 60 seconds. You need JDK 17 or newer, Maven and free localhost port 19877. The first Maven build downloads the pinned dependencies. <a href="https://github.com/williampuk/learning">Site source repository</a></p>
+          <pre aria-label="First terminal command"><code>cd fix-engine/fix-engine-java/java
+mvn -q compile
+mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.SessionLab \
+  -Dexec.args="accept config/acceptor.cfg"</code></pre>
+          <pre aria-label="Second terminal command"><code>cd fix-engine/fix-engine-java/java
+mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.SessionLab \
+  -Dexec.args="connect config/initiator.cfg"</code></pre>
+          <ol>
+            <li>Compare the CompIDs and socket settings in the <a href="./java/config/acceptor.cfg">acceptor settings</a> and <a href="./java/config/initiator.cfg">initiator settings</a>. Each peer keeps its own message store and log. The acceptor listens. The initiator connects and sends Logon first.</li>
+            <li>In <a href="./java/src/main/java/learning/fix/LabPeer.java">LabPeer.java</a>, find the <code>ApplicationAdapter</code> callbacks. <code>fromAdmin</code> observes Logon, Heartbeat and Logout. <code>onLogon</code> records the FIX session’s Logon state. <code>fromApp</code> hands incoming orders and execution reports to the scenario thread. Outbound messages go to the intended <code>SessionID</code> through <code>Session.sendToTarget</code>.</li>
+            <li>The initiator sends <code>35=D</code> for an order such as FIRST-2. The acceptor responds with <code>35=8|150=0|39=0|14=0|151=100</code> in selected fields. You have an accepted order with 100 open. View each side’s <code>*.messages.log</code> under <code>target/fix-first</code> for the full messages and graceful Logout.</li>
+          </ol>
+          <p>First contact, workflow certification and production operations are different milestones. Use a short session for each exercise, then repeat the order flow from a clean state and explain the wire evidence without using the UI. Training plans sometimes budget about 20–30 hours for basic fluency, 60–100 more for implementation and certification, and 150–250 or more for broader architecture and operations. Treat those as study estimates. Production competence comes from handling real counterparty, recovery and incident cases.</p>
+          <p class="file-links"><a href="./java/src/main/java/learning/fix/SessionLab.java">SessionLab.java</a><a href="./java/pom.xml">Maven dependencies</a></p>
+        </section>
+
         <section id="recovery" class="chapter">
           <h2>Recover a missing fill</h2>
           <p>The broker buys 100 shares of <code>DEMO</code> at a limit of 25.00. The venue accepts C42 as V900. Predict what the broker should do when the reconnect Logon arrives with sequence 4 and it still expects 3.</p>
+          <p>The beginner C42 trace loses a 60-share fill at sequence 4. This standalone fault fixture uses one 100-share fill at sequence 3 so you can isolate the recovery. The replay rules and ledger checks are the same.</p>
 
           <div id="recovery-lab" class="trace-lab" hidden>
             <div class="trace-controls">
@@ -205,6 +226,167 @@ java "$lab" replay "$scratch"</code></pre>
           <p>The fixture treats one keyed file as its whole ledger. A production ledger typically inserts a venue-scoped inbox key and updates order state in the same transaction. The exercise covers a forced process halt after a completed file write. Host loss, partial writes, and replication need their own storage design and tests. <a href="./java/src/main/java/learning/fix/CheckpointLab.java">CheckpointLab.java</a> · <a href="https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/nio/channels/FileChannel.html#force(boolean)">JDK FileChannel.force</a></p>
         </section>
 
+        <section id="application-labs" class="chapter">
+          <h2>Build and verify trading workflows</h2>
+          <p>Run these scenarios from <code>fix-engine/fix-engine-java/java</code> after <code>mvn -q compile</code>. The FIX peers bind to localhost. Each scenario checks fields, sequence of responses and the resulting application state. For the full messages, read the logs in the evidence directory printed by the program.</p>
+
+          <h3 id="order-workflow">Match orders, handle changes, and reconcile fills</h3>
+          <pre aria-label="Run the Java order lifecycle lab"><code>mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.OrderLifecycleLab</code></pre>
+          <p>One acceptor hosts two order-entry sessions and a separate market-data session. It uses the incoming <code>SessionID</code> to identify the owner and route replies. A per-symbol book chooses crossing opposite-side orders by price and then time. The fixture uses exact decimal prices and integral lots. Each side receives its own Execution Report. Position projections use the execution’s business identity to apply the copied event once.</p>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Expected Java order lifecycle results">
+            <table>
+              <thead><tr><th scope="col">Step</th><th scope="col">Wire evidence</th><th scope="col">Check in the ledger</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Cross two resting offers</th><td>C42 receives two <code>150=F</code> reports for 20 at $24.90. Seller S1 fills before S2.</td><td>40 filled, 60 open. The higher-priced offer remains available.</td></tr>
+                <tr><th scope="row">Replace total with 80</th><td><code>150=E</code>, then <code>150=5</code>. A later request for 30 gets <code>35=9|434=2</code>.</td><td>40 filled, 40 open on C42-R1. A rejected request leaves the active version in place.</td></tr>
+                <tr><th scope="row">Test protocol and business rejects</th><td>Replace an unknown ID to get <code>35=9|102=1</code>. Reuse <code>C42-R1</code> to get <code>35=8|150=8|103=6</code>. Send a well-formed but unsupported Trading Session Status Request (<code>g</code>) to get <code>35=j|372=g|380=3</code>.</td><td>The original order remains intact. Compare these with the session-level missing-tag reject in the dictionary exercise.</td></tr>
+                <tr><th scope="row">Ask for status</th><td><code>H</code> → <code>8</code> with <code>150=I</code>, <code>17=0</code> and the request’s <code>790</code>.</td><td>Existing quantities are reported without another trade.</td></tr>
+                <tr><th scope="row">Race a cancel against a sale</th><td><code>150=6</code>, then a trade while <code>39=6</code>, then <code>35=9|102=0|39=2</code>.</td><td>80 filled, 0 open, average $24.95. A separate C43 cancel succeeds.</td></tr>
+                <tr><th scope="row">Block admission and cancel working orders</th><td>Oversized, over-notional and out-of-collar orders get <code>35=8|150=8</code>. A scoped <code>q</code> returns <code>r</code> with <code>533=2</code> and a Canceled report for each affected order. Status requests verify the final states.</td><td>Both buyer orders close. The seller’s resting offer and the buyer’s executed position retain their own state.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Compare the FIX logs with the active ID chain, fills, and the drop-copy projection. Each <code>Drop copy</code> log line names the execution and its session, and gives elapsed time from report creation through local send and projection update. This measures an in-process teaching path. An independent drop-copy session can lag, gap and need its own recovery. Alert when a scoped execution is absent from one side past the agreed delay. Reconcile quantity, price and side before repairing state. Adapt limits to the instrument, account, credit, trading phase and daily volume. Reserve exposure atomically across sessions before sending. Treat stale reference prices and stale copies according to the approved risk policy. <a href="./java/src/main/java/learning/fix/OrderLifecycleLab.java">OrderLifecycleLab.java</a></p>
+          <p>The teaching book sorts eligible entries at the point of matching. A production book can maintain sorted bid and offer price levels, with FIFO order queues within each level and a direct ID index for cancels. Measure the cost of updates and cancellations as well as matching. The UK FCA’s 2024 Citigroup notice documents how failures in order controls let part of an erroneous 2022 basket reach European markets. A test plan should exercise what happens when a plausible field value produces an implausible aggregate order. <a href="https://www.fca.org.uk/publication/final-notices/citigroup-global-markets-limited-2024.pdf">FCA final notice</a></p>
+          <details>
+            <summary>Check mass-cancel scope across two clients</summary>
+            <p>S3 belongs to the seller. Predict whether the buyer’s cancel for ACME removes it. The lab queries C45, C45B, C42-R1 and S3 with distinct request IDs within each session. C45 and C45B are canceled, C42-R1 is still filled at 80, and S3 still has 60 open. The buyer’s permission covers its own orders. Check the affected IDs and the individual reports as well as <code>533</code>. In FIX 4.4 a status report uses <code>ExecID=0</code>. Use the echoed request ID to match the response. <a href="https://orchimate.org/fixtrading/fix-4.4/messages/ExecutionReport">FIX 4.4 Execution Report</a></p>
+          </details>
+
+          <h3 id="market-workflow">Subscribe to a book and trade against a dealer quote</h3>
+          <details id="matching-to-feed">
+            <summary>Follow a market-data feed driven by matching</summary>
+            <p>The first part of <code>OrderLifecycleLab</code> subscribes to BETA and GAMMA over the same market-data session with distinct request IDs. The publisher reads the quantity still open at each price in the matching book after each scenario step. It compares those totals with the last published book to choose an add, change or delete.</p>
+            <div class="table-wrap" tabindex="0" role="region" aria-label="Order events and resulting BETA market-data messages">
+              <table>
+                <thead><tr><th scope="col">Order event</th><th scope="col">Wire update</th><th scope="col">BETA offers after the update</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row">Subscribe with one offer already resting</th><td><code>W</code> snapshot</td><td>60 at $25.10</td></tr>
+                  <tr><th scope="row">Enter 20 more at $25.10</th><td><code>X</code> change</td><td>80 at $25.10</td></tr>
+                  <tr><th scope="row">Enter 5 at $25.20</th><td><code>X</code> add</td><td>80 at $25.10 and 5 at $25.20</td></tr>
+                  <tr><th scope="row">A buy fills 50 at $25.10</th><td><code>X</code> change</td><td>30 at $25.10 and 5 at $25.20</td></tr>
+                  <tr><th scope="row">Cancel the first order’s remaining 10</th><td><code>X</code> change</td><td>20 at $25.10 and 5 at $25.20</td></tr>
+                  <tr><th scope="row">Cancel the last 20 at $25.10</th><td><code>X</code> delete</td><td>5 at $25.20</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>The lab verifies each received level against the matching book. Compare the changes at $25.10 with the buyer’s private 50-share Execution Report. The public quantity also falls when sellers cancel. GAMMA has independent depth at the same price and changes only when a GAMMA order arrives. The fixture takes its snapshots and publishes updates at controlled step boundaries. A concurrent gateway needs an ordering rule for snapshot and updates. <a href="https://fixtrading.org/packages/recommended-practices-for-book-management/">FIX book management practices</a></p>
+          </details>
+          <pre aria-label="Run the market data and quote lab"><code>mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.MarketAndQuoteLab</code></pre>
+          <p>The acceptor serves one market-data session and one RFQ session. First inspect the unknown-symbol <code>Y</code> reject. Then follow subscription <code>V</code> → snapshot <code>W</code> → add, change and delete <code>X</code> → unsubscribe and rebuild under a new request ID. The request uses <code>264=0</code> for the full aggregated book. The local book keys the levels by side and price. The FIX 4.4 snapshot has no <code>278</code> field for entry IDs. Match the venue’s identity and ordering rules before consuming a real feed.</p>
+          <p>On the RFQ session, the dealer responds to <code>R</code> with <code>S</code> containing a client-specific price and expiry. The lab accepts a live quote with <code>D</code>, rejects an expired quote, and withdraws another with <code>Z</code> (<code>298=1</code>) and <code>AI</code> (<code>297=1</code>). At the session close, the dealer withdraws two live quotes together with <code>298=4</code> and confirms both now reject acceptance. The FIX 4.4 Cancel All carries the lab’s agreed <code>117=SESSION-CLOSE</code> identifier. Match the counterparty’s scope and required fields. The lab sets the business clock explicitly so you can repeat the expiry case. <a href="./java/src/main/java/learning/fix/MarketAndQuoteLab.java">MarketAndQuoteLab.java</a> · <a href="https://orchimate.org/fixtrading/fix-4.4/messages/QuoteCancel">FIX 4.4 QuoteCancel</a></p>
+          <details>
+            <summary>Find the first divergence after a market-data gap</summary>
+            <p>The lab deliberately skips a received update that changes the best bid from 200 to 150 shares. The FIX session saw it, while the application book still has 200. The lab invalidates that view, rebuilds it from a snapshot that shows 150 and sends a late update for the old subscription. The final assertion verifies that the late message leaves the rebuilt book intact. In production, compare session sequences, application offsets and subscription IDs to locate the missed update before reopening the feed for trading.</p>
+          </details>
+
+          <h3 id="routing-workflow">Split and reroute a parent order</h3>
+          <pre aria-label="Run the routing and algorithm example"><code>mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.RoutingLab</code></pre>
+          <p>A router compares normalized and fresh quotes from two mock venues. For a 100-share buy at a $25.05 limit, B has 60 at $25.00 plus $0.01 fees. A has 70 at $24.99 plus $0.04. Route 60 to B and 40 to A because B has the lower effective price. A third, stale quote is excluded. B fills 40. Only after the unexecuted 20 are confirmed closed can those 20 be routed again. Match a replayed fill by venue and execution ID before adjusting remaining quantity. In production include fill probability, trading costs and deadlines and retain the decision for transaction cost analysis. Route instruments by separately onboarded profiles with normalized ticks, lot sizes, contract multipliers and settlement conventions.</p>
+          <p>The same exercise builds four 25-share FIX children for a local time-weighted strategy. FIXatdl describes strategy metadata in XML. For this fixture the broker’s agreed mapping is <code>9001=DEMO_TWAP_V1</code> and <code>9002=4</code> for the number of child releases, with a supplied one-minute UTC window. Validate required values and permitted ranges, give a changed strategy schema a new version, and publish the definition with the venue profile. In other profiles, VWAP uses a volume curve, and a participation strategy controls how much of recent market volume it targets. The <a href="#version-profiles">custom dictionary exercise</a> demonstrates validation of a strategy tag at the FIX layer. <a href="./java/src/main/java/learning/fix/RoutingLab.java">RoutingLab.java</a> · <a href="https://fixtrading.org/packages/fixatdl-1-1-overview/">FIXatdl overview</a></p>
+          <p>Compare three instrument mappings in the same run. A cash equity routes in shares, the futures order carries a month and multiplier, and the FX forward has a settlement date and a base amount of EUR 10,000 at 1.08 USD per EUR. Its terms amount is USD 10,800. Each routing profile can use its own session, dictionary and limits.</p>
+
+          <h3 id="post-trade-workflow">From fills to allocations, affirmations and positions</h3>
+          <pre aria-label="Run the Java post-trade lab"><code>mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.PostTradeLab</code></pre>
+          <p>This scenario uses the beginner C42 quantities and prices. Start with Trade Capture <code>AD → AE</code> and match both reports to 100 shares for $2,496. Send an invalid split and see its rejection in <code>P</code>. Then send <code>J</code> with the correct groups of 70 and 30 and inspect <code>P → AS</code> and the report acknowledgement <code>AT</code>. In the two <code>AS</code> allocation rows, compare average price (<code>153</code>) and account net amounts (<code>154</code>) with the terms in each <code>AK</code>. Fund B rejects a wrong account via <code>AU|940=2</code>. The corrected Confirmation has a new ID, <code>666=1</code> and a <code>772</code> reference to the rejected one.</p>
+          <p>Inspect the distinct allocated, rejected and affirmed states. Compare the account quantities in <code>booked-positions.tsv</code> with the FIX <code>AN → AP</code> request and report. The sample export records the booked projection. A production ledger persists both economic exposure and booking status and deduplicates by the applicable report/version identity. Account-level affirmation can gate settlement readiness, and pending fills should still count for exposure management. The venue and the asset class determine settlement, cash, collateral and margin workflows. <a href="./java/src/main/java/learning/fix/PostTradeLab.java">PostTradeLab.java</a> · <a href="https://fixtrading.org/guidelines/post-trade/">FIX post-trade guidelines</a></p>
+          <p>Compare the lab’s one-time trade query with CME STP’s filtered subscription certification, which includes a subscription response <code>AQ</code> before trade reports. For another real profile, JSE publishes separate FIX 5.0 SP2 specifications for trading, post-trade and drop copy. <a href="https://www.cmegroup.com/tools-information/webhelp/acp-stp-fix-btec/Content/trade-capture-report-request.html">CME STP certification test</a> · <a href="https://clientportal.jse.co.za/technical-library/trading-and-market-data-documentation">JSE gateway documentation</a></p>
+        </section>
+
+        <section id="session-profiles" class="chapter">
+          <h2>Run multiple sessions with different contracts</h2>
+          <p>Use separate identities when order entry, market data, drop copy and test traffic need independent sequencing, limits or recovery. In <code>SessionSettings</code>, each <code>[SESSION]</code> overrides its <code>[DEFAULT]</code> values. Here are two initiator sessions from a hypothetical desk. The ports and IDs are examples for a local simulator. The workflow labs create equivalent settings in Java for the peers they start.</p>
+          <pre aria-label="QuickFIX/J multi-session configuration example"><code>[DEFAULT]
+ConnectionType=initiator
+BeginString=FIX.4.4
+NonStopSession=Y
+HeartBtInt=30
+SocketConnectHost=127.0.0.1
+UseDataDictionary=Y
+DataDictionary=FIX44.xml
+FileStorePath=target/desk/store
+FileLogPath=target/desk/log
+
+[SESSION]
+SenderCompID=DESK-ORDER
+TargetCompID=BROKER-ORDER
+SocketConnectPort=19877
+
+[SESSION]
+SenderCompID=DESK-MD
+TargetCompID=BROKER-MD
+SocketConnectPort=19878</code></pre>
+          <p>Use the complete <code>SessionID</code> to choose a configured adapter, dictionary, and order or market-data handler in <code>fromApp</code>. A routing table can map each identity to a handler and reject unresolved mappings. Use explicit test IDs and endpoints. Keep test traffic physically or logically separated from production. In the labs, <code>LabPeer</code> observes admin and application receive/transmit timestamps, Logon state, and both next counters. For monitoring, compare monotonic elapsed time against a profile-specific threshold and keep the application readiness gate separate from Logon.</p>
+
+          <h3 id="version-profiles">Select the right dictionary and version</h3>
+          <pre aria-label="Run dictionary validation and FIXT client exercises"><code>mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.SessionLab -Dexec.args=dictionary
+mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.SessionLab -Dexec.args=fix50</code></pre>
+          <p>The first run copies the bundled FIX 4.4 XML, defines local tag <code>9001</code> and requires it on <code>D</code>. The peer rejects the first order with <code>35=3|371=9001|372=D|373=1</code>. The second order includes the field and reaches <code>fromApp</code>. Compare the generated XML with the standard dictionary. In production, version the XML and conditional business rules together. Exercise both standard and counterparty-specific fields. A field marked optional in XML may still be required for a particular order type or instrument.</p>
+          <p>The next run uses these QuickFIX/J settings. Inspect Logon for <code>1137=9</code> and watch a futures order parsed as FIX 5.0 SP2. An equity order on the same FIXT session carries <code>1128=6</code> to select FIX 4.4. The counters continue across both orders. Configure alternate versions only when the peer supports them.</p>
+          <pre aria-label="QuickFIX/J FIXT dictionary configuration"><code>BeginString=FIXT.1.1
+DefaultApplVerID=9
+TransportDataDictionary=FIXT11.xml
+AppDataDictionary=FIX50SP2.xml
+AppDataDictionary.FIX.4.4=FIX44.xml</code></pre>
+          <p>In FIXT, transport/admin messages and application messages use different dictionaries. The default application message needs no explicit version override. The guide’s multi-version exercise uses an explicit override and verifies the Java message class chosen by the acceptor. Keep bilateral tag additions distinct from FIX Trading Community extension pack versions. <a href="https://quickfixj.org/docs/configuration/">QuickFIX/J configuration</a> · <a href="https://fixtrading.org/standards/fixsession/">FIX Session Layer standard</a></p>
+
+          <h3 id="store-profiles">Choose a store, schedule and reset policy</h3>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="QuickFIX/J message store choices">
+            <table>
+              <thead><tr><th scope="col">Factory</th><th scope="col">Recovery behavior</th><th scope="col">Configuration and checks</th></tr></thead>
+              <tbody>
+                <tr><th scope="row"><code>MemoryStoreFactory</code></th><td>Counters and replay data last only for the process lifetime.</td><td>Use for controlled tests or a feed with an agreed cold-start procedure. Verify the peer’s resynchronization before using it after a restart.</td></tr>
+                <tr><th scope="row"><code>FileStoreFactory</code> or <code>CachedFileStoreFactory</code></th><td>Both use file-backed history. CachedFileStore trades memory for a larger working set of cached messages.</td><td>Set <code>FileStorePath</code> per installation and test the configured sync behavior, filesystem errors and recovery. Measure latency at the promised durability boundary.</td></tr>
+                <tr><th scope="row"><code>JdbcStoreFactory</code></th><td>Stores session state in database tables and can support a controlled standby handoff.</td><td>Provision the JDBC driver and schema and configure <code>JdbcDriver</code>, <code>JdbcURL</code>, credentials and session/message table names. Test transaction, replication and fencing semantics.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>The connector picks the store through the factory wired in Java. With <code>PersistMessages=N</code>, historical application bytes are unavailable for normal replay and the engine can gap-fill. Some stores still keep sequence counters. Choose this behavior only with an explicit recovery agreement. A memory store is still capable of replay during its own lifetime when message persistence is enabled.</p>
+          <details>
+            <summary>Configure file and JDBC storage for a test profile</summary>
+            <p>For a file-backed profile, pass <code>new FileStoreFactory(settings)</code> to the connector. Test the effect of <code>FileStoreSync=Y</code> with the target filesystem and replay workload. A cached file store uses the corresponding <code>CachedFileStoreFactory</code>. Start the JDBC comparison with the QuickFIX/J schema and a reachable test database, supply <code>JdbcUser</code> and <code>JdbcPassword</code> through your local settings loader, and construct <code>new JdbcStoreFactory(settings)</code>.</p>
+            <pre><code>JdbcDriver=org.postgresql.Driver
+JdbcURL=jdbc:postgresql://127.0.0.1:5432/fix
+JdbcStoreSessionsTableName=sessions
+JdbcStoreMessagesTableName=messages</code></pre>
+            <p>Keep the message store and audit log roles distinct. During testing, use a noncritical simulator and compare recovered sequence and replay behavior as well as latency. <a href="https://quickfixj.org/docs/configuration/">QuickFIX/J message persistence settings</a></p>
+          </details>
+          <pre aria-label="Run the file-store restart and reset exercises"><code>fix_restart_dir=$(mktemp -d)
+mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.SessionLab \
+  -Dexec.args="restart $fix_restart_dir"
+mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.SessionLab \
+  -Dexec.args="restart $fix_restart_dir"
+mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.SessionLab -Dexec.args=reset</code></pre>
+          <p>The two separate Maven JVMs reuse the same stores. The first order uses sequence 2. The second uses a higher sequence, typically 5 after the intervening Logout and Logon. The reset exercise explicitly requests <code>141=Y</code> on a fresh Logon at 1 and checks that the next application message goes out at 2. It also checks two timestamps inside one configured day versus the next day.</p>
+          <ul>
+            <li>For an intraday loss of TCP, keep the <code>ResetOnLogon</code>, <code>ResetOnLogout</code> and <code>ResetOnDisconnect</code> settings consistent with an agreed continuation and recover before releasing orders.</li>
+            <li>For a new scheduled session, set <code>StartTime</code>, <code>EndTime</code> and <code>TimeZone</code>, or use <code>NonStopSession</code> if the connection is continuous. Compare the peer’s week, day and holiday rules and test the start boundary, including daylight saving where applicable.</li>
+            <li>For an exceptional session reset, coordinate the wire procedure with the peer and reconcile open orders and executions. Reset-mode Sequence Reset uses <code>123=N</code> or an omitted flag and <code>36</code> as the new expected number. Unlike Gap Fill it disregards that message’s own <code>34</code> for gap detection. Treat this as an exceptional recovery procedure because the skipped business events can still matter.</li>
+          </ul>
+          <p>Inspect incoming and outgoing Logon evidence rather than assuming a local flag changes the counterparty’s state. <a href="https://quickfixj.org/docs/configuration/">QuickFIX/J settings reference</a> · <a href="https://fixtrading.org/standards/fixsession/">FIX Session Layer standard</a></p>
+
+          <h3 id="secure-session">Verify TLS and FIX Logon independently</h3>
+          <pre aria-label="Run the mutual TLS and FIX Logon exercise"><code>mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.SessionLab -Dexec.args=tls</code></pre>
+          <p>The lab generates one-day localhost certificates and PKCS#12 stores with the JDK’s <code>keytool</code>. Both peers use TLS 1.3. The acceptor uses <code>NeedClientAuth=Y</code> and trusts the fixture’s client certificate. The initiator validates the server certificate and endpoint identity. Expect an initial certificate trust failure, then a successful handshake with rejected FIX credentials, then successful Logon and an order acknowledgement. Read the corresponding cases in <code>SessionLab</code> and <code>LabPeer.toAdmin</code>/<code>fromAdmin</code>. The lab adds <code>553/554</code> and <code>464=Y</code> to its local Logon only. Wire logging is disabled for those sessions.</p>
+          <p>FIXS profiles define choices for TLS protocol versions, peer trust and authentication. Profiles using FIXA authenticate the FIX client in the session inside the TLS channel. Select the form supported by the counterparty and the applicable standard. At the gateway, bind an authenticated identity to permitted CompIDs, environments and trading permissions. Authentication establishes who connected. Authorization still controls which instruments, accounts, message types and risk limits they can use.</p>
+          <p>Use managed keys and approved trust anchors. Practise certificate rotation and expiry alerting in test. Protect gateways with network segmentation and allowlists and watch failed Logon and handshake patterns without exposing credentials. Suspected compromise may require gating orders, revoking certificates or disabling identities, rotating secrets and reconciling pending orders with the counterparty. <a href="https://quickfixj.org/docs/secure-communications/">QuickFIX/J secure communications</a> · <a href="https://www.fixtrading.org/wp-content/uploads/download-manager-files/FIX-over-TLS-Technical-Standard-v1.0.pdf">FIXS v1.0 and FIXA</a></p>
+
+          <h3 id="continuity">Fail over a session and recover a site</h3>
+          <pre aria-label="Run the sequential standby takeover exercise"><code>mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.SessionLab -Dexec.args=failover</code></pre>
+          <p>The fixture closes the primary before starting the standby on a different port with the same local message stores. It verifies sequence continuity, then compares two memory-store instances that both start fresh. A production active/passive design also needs a lease or other fencing that stops a partitioned primary from writing or sending. In active/active, distribute distinct session identities across the active nodes. A specific session identity still has one writer at a time, and application books and risk reservations need explicit ownership and replication rules.</p>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Disaster recovery site choices">
+            <table>
+              <thead><tr><th scope="col">DR site</th><th scope="col">Before the incident</th><th scope="col">What to verify during cutover</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Hot</th><td>Services and connectivity ready, with recent or synchronous replication.</td><td>Fence the previous sender, use the vendor’s DR endpoints and measure committed data loss and the time to safe trading.</td></tr>
+                <tr><th scope="row">Warm</th><td>Infrastructure prepared with periodic replication or restore inputs.</td><td>Promote restored state, replay any retained range, and reconcile orders and positions.</td></tr>
+                <tr><th scope="row">Cold</th><td>Backups and documented provisioning procedures.</td><td>Rebuild infrastructure and credentials, confirm the recovery point, then re-onboard or reconcile with the counterparty.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Set a recovery time objective for restoring the service and a recovery point objective for tolerable data loss. Test primary/backup gateway failover and whole-site recovery independently. Compare shared JDBC or replicated storage under lag, partition and failback. A shared store alone cannot prevent two writers. Monitor session ownership, watch for missed or duplicate executions, and keep order admission closed until the desk can reconcile uncertain orders. <a href="https://quickfixj.org/docs/acceptor-failover/">QuickFIX/J acceptor failover</a> · <a href="https://www.nyse.com/publicdocs/nyse/NYSE_Pillar_Gateway_FIX_Protocol_Specification.pdf">NYSE Pillar failure recovery profile</a></p>
+        </section>
+
         <section id="performance" class="chapter">
           <h2>Design for the tail</h2>
           <p>The best engine for a workload is the one that meets its latency, peak throughput, recovery, and durability targets together. Start with the representative message mix, session count, sustained rate, burst duration, CPU budget, replay window, and maximum acceptable recovery time. Define the point at which an event counts as durable before measuring it.</p>
@@ -247,6 +429,18 @@ java "$lab" replay "$scratch"</code></pre>
             <li><strong>Measure failure under load.</strong> Sweep load past saturation, reconnect during a burst, replay a large range while other sessions are live, and inject slow disk or a slow consumer. Report recovery time and correctness alongside latency. Profile before and after each change with allocation data, JFR, CPU and storage metrics.</li>
           </ol>
           <p>Compare QuickFIX/J as a baseline with a low-latency design such as Artio, which separates its gateway and application library and uses Aeron between them. Build a specialized engine when the remaining gap is measured and the team can maintain certification, recovery, and support. If the venue offers a binary protocol, evaluate it as a separate integration with its own contract. <a href="https://github.com/artiofix/artio">Artio architecture</a> · <a href="https://github.com/openjdk/jmh">OpenJDK JMH</a> · <a href="https://github.com/HdrHistogram/HdrHistogram">HdrHistogram and coordinated omission</a></p>
+          <details id="run-benchmark">
+            <summary>Measure paced order-to-ack latency on localhost</summary>
+            <p>From the Java lab directory, run the same warm-up, offered rate and sample count with different storage and logging. The four arguments are messages per second, sample count, store and wire logging.</p>
+            <pre><code>mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.LatencyLab \
+  -Dexec.args="1000 2000 file log"
+mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.LatencyLab \
+  -Dexec.args="1000 2000 file no-log"
+mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.LatencyLab \
+  -Dexec.args="1000 2000 memory no-log"</code></pre>
+            <p>Read the offered and completed rates, p50, p99, p99.9, and generator lateness. The send schedule keeps running while a separate worker receives acknowledgements. The latency includes time from intended send, so generator lateness is visible. If the run loses or misorders a response, the assertion fails. At 2,000 samples p99.9 is driven by the slowest few, so repeat longer runs before drawing conclusions about production.</p>
+            <p>Change one factor at a time. A file store with wire logging disabled still writes session history. A memory store loses that history on exit. For a JVM comparison, select a heap size or a GC setting, use JFR or GC logs, and keep the store, audit requirements and workload fixed. Repeat on separate hosts to account for NICs and network distance. Compare venue proximity, dedicated gateways and colocated deployment only when relevant to the same business and durability requirements. <a href="./java/src/main/java/learning/fix/LatencyLab.java">LatencyLab.java</a></p>
+          </details>
 
           <h3>Find the part of the path that got slower</h3>
           <p>Consider an illustrative benchmark using the same traffic profile and durability settings in both runs. At 30,000 messages per second the engine meets its 2 ms local handoff p99.9 target. Add a replay on one session and live traffic on the others misses that target.</p>
@@ -305,7 +499,43 @@ jcmd &lt;pid&gt; Thread.print
 jcmd &lt;pid&gt; JFR.start name=fix-incident settings=default duration=60s filename=/approved/path/fix-incident.jfr</code></pre>
             <p>Compare TCP send or receive backlog with application queue age. Take thread samples for blocked callbacks and use JFR to look for pauses, allocation pressure, contention, and I/O around the first slow event. Use your on-call policy for production captures and restrict access to the artifacts. <a href="https://docs.oracle.com/en/java/javase/21/docs/specs/man/jcmd.html">JDK diagnostic command reference</a></p>
           </details>
-          <p>Useful per-session signals include connected and recovery state, last RX/TX, heartbeat and timer lag, gaps and replay age, reject counts by reason, queue age, journal failures, and order reconciliation lag. Keep per-order IDs in searchable logs instead of metric labels. Alert on sustained lag and business uncertainty even while the socket is healthy.</p>
+          <p>Useful per-session signals include connected and recovery state, last receive and send times, heartbeat and timer lag, gaps and replay age, reject counts by reason, queue age, journal failures, and order reconciliation lag. Keep per-order IDs in searchable logs instead of metric labels. Alert on sustained lag and business uncertainty even while the socket is healthy.</p>
+          <details id="liveness-lab">
+            <summary>Run a two-session heartbeat incident</summary>
+            <p>From <code>fix-engine/fix-engine-java/java</code>, compile once with <code>mvn -q compile</code>, then run the liveness exercise.</p>
+            <pre aria-label="Run the Java liveness lab"><code>mvn -q exec:java@exercise -Dexec.mainClass=learning.fix.SessionLab \
+  -Dexec.args=liveness</code></pre>
+            <ol>
+              <li><strong>Verify the reply.</strong> The acceptor sends a TestRequest (<code>35=1</code>) to the quiet STALLED peer. The peer replies with a Heartbeat (<code>35=0</code>) echoing tag <code>112</code>. The monitor sees fresh inbound traffic again.</li>
+              <li><strong>Watch the alert.</strong> STALLED leaves its TCP socket open and stops replying. The acceptor sends another TestRequest. The monitor reports <code>STALE</code> and both next sequence numbers after more than four seconds without an inbound message. The engine eventually disconnects that socket.</li>
+              <li><strong>Check isolation.</strong> Look for <code>STILL-LIVE</code> in CLIENT’s order and acknowledgement after STALLED disconnects. Compare both sessions’ message and event logs in the printed evidence directory.</li>
+            </ol>
+            <p>The test sets a two-second heartbeat on STALLED and deliberately widens the acceptor’s disconnect window so you can observe the alert first. The monitor uses elapsed receive time. The FIX engine owns the probe and disconnect timers. Use the session profile and observed traffic to set production thresholds. <a href="./java/src/main/java/learning/fix/SessionLab.java">SessionLab.java</a> · <a href="https://quickfixj.org/docs/configuration/">QuickFIX/J session settings</a></p>
+          </details>
+          <details>
+            <summary>Work a per-session alert from two sources</summary>
+            <p>Order entry has processed fills E1 and E2 for C42 and reports 100 filled. The drop-copy subscriber has E1 only and projects 40. If the copy exceeds its allowed lag, alert on venue, session and lag duration, then inspect its sequence and replay status. Compare E2’s venue-scoped identity and fields with the upstream record. A healthy order-entry heartbeat gives no assurance that drop copy is current.</p>
+            <p>Dashboards can group rates and rejects by session and message type, quote and drop-copy age, reconnect frequency, and order-to-ack percentiles. Export structured logs and bounded-cardinality metrics to your monitoring stack. Keep raw FIX payloads, order IDs and correlators in restricted evidence where they can be searched during an incident.</p>
+          </details>
+        </section>
+
+        <section id="certification" class="chapter">
+          <h2>Rehearse venue certification</h2>
+          <p>Run the local regression suite with POSIX shell, JDK 17 or newer, Maven and a free localhost port 19876 for the recovery fixture. Each scenario uses a new process or store except the two explicit restart runs. Each assertion fails the script on a mismatch. TLS handshake errors are part of one expected negative test.</p>
+          <pre aria-label="Run all deterministic local FIX scenarios"><code>sh fix-engine/fix-engine-java/java/verify.sh</code></pre>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Example venue certification scenarios and evidence">
+            <table>
+              <thead><tr><th scope="col">Scenario</th><th scope="col">Actions</th><th scope="col">Evidence</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Connection</th><td>Start acceptor first. Connect, confirm Logon, submit one order, Logout. In a separate run, stop responding to a liveness probe.</td><td>Both directions have the expected identities and next numbers. Verify the alert and disconnect are scoped to the silent session. Exercise certificate and Logon rejection separately.</td></tr>
+                <tr><th scope="row">Lifecycle</th><td>New, split fills, valid and invalid replaces, cancel before and after fills, status, and mass cancel.</td><td>Assert message type, referenced IDs, state, order quantity and ledger effects at every step. Check for unexpected extra fills.</td></tr>
+                <tr><th scope="row">Validation and recovery</th><td>Omit a required custom tag, cut the connection with a fill in flight, restart from retained store, and rehearse an agreed reset.</td><td>Assert reject reason, replay header fields and order identity, then reconcile both sequence streams and the business effects.</td></tr>
+                <tr><th scope="row">Production gates</th><td>Run a controlled takeover and reconcile the desk before order entry resumes. Repeat with delayed replies, bursts and substream gaps in preproduction.</td><td>Record one owner per session identity, safe admission state, retained message range and measured recovery time.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>The reusable pattern is <code>send → expect type → assert fields → assert state</code>. <code>LabPeer</code> provides bounded wait and leaves business assertions in the scenario. When adding a case in CI, keep the expected timeline and wire fixtures versioned with the dictionary. A deterministic simulator can drive rejections, delays and disconnects on demand. Record logs and order IDs on failure, redact customer and credential data, and add each confirmed production incident as a regression fixture.</p>
+          <p>For formal certification, move to the counterparty’s approved test interface. Obtain its exact checklist, rules of engagement, supported order types and recovery behavior. Track coverage from each test case to the expected wire trace, application state and counterparty sign-off. <a href="./java/verify.sh">Local regression runner</a> · <a href="https://fixtrading.org/standards/fixsession/">FIX Session Layer test cases</a></p>
         </section>
 
         <section id="roles" class="chapter">

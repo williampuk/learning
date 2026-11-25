@@ -22,6 +22,16 @@
       <version>${quickfixj.version}</version>
     </dependency>
     <dependency>
+      <groupId>org.quickfixj</groupId>
+      <artifactId>quickfixj-messages-fixt11</artifactId>
+      <version>${quickfixj.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.quickfixj</groupId>
+      <artifactId>quickfixj-messages-fix50sp2</artifactId>
+      <version>${quickfixj.version}</version>
+    </dependency>
+    <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-simple</artifactId>
       <version>2.0.18</version>
@@ -39,14 +49,26 @@
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>exec-maven-plugin</artifactId>
         <version>3.6.2</version>
-        <configuration>
-          <executable>java</executable>
-          <arguments>
-            <argument>-classpath</argument>
-            <classpath/>
-            <argument>learning.fix.RecoveryLab</argument>
-          </arguments>
-        </configuration>
+        <executions>
+          <execution>
+            <id>default-cli</id>
+            <configuration>
+              <executable>java</executable>
+              <arguments>
+                <argument>-classpath</argument>
+                <classpath/>
+                <argument>learning.fix.RecoveryLab</argument>
+              </arguments>
+            </configuration>
+          </execution>
+          <execution>
+            <id>exercise</id>
+            <goals><goal>java</goal></goals>
+            <configuration>
+              <cleanupDaemonThreads>false</cleanupDaemonThreads>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>

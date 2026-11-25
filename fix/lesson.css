@@ -40,6 +40,8 @@ pre {
   line-height: 1.5;
 }
 pre code { font-size: .86rem; }
+.field-trace code { overflow-wrap: normal; }
+.admin-frames { overflow-x: auto; white-space: pre; }
 
 .shell { width: min(100% - 3rem, 73rem); margin-inline: auto; }
 .skip { position: absolute; z-index: 2; inset: .75rem auto auto .75rem; padding: .5rem 1rem; background: var(--ink); transform: translateY(-220%); }
