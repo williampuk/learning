@@ -177,10 +177,26 @@ const orderScenarios = {
     explanation: 'The app requests a new total of 80. The currently working total is still 100.',
     status: 'Partially filled · replace sent', filled: 40, open: 60,
   }, {
+    direction: toApp, title: 'Report Pending Replace',
+    tags: '35=8|11=C42-R1|41=C42|37=B510|17=E5|150=E|39=E|38=100|14=40|151=60|6=24.90|',
+    explanation: 'The broker is considering the change. The old terms still work and the remaining quantity can still trade.',
+    status: 'Pending replace', filled: 40, open: 60,
+  }, {
     direction: toApp, title: 'Confirm the replacement',
-    tags: '35=8|11=C42-R1|41=C42|37=B510|17=E5|150=5|39=1|38=80|14=40|151=40|6=24.90|',
+    tags: '35=8|11=C42-R1|41=C42|37=B510|17=E7|150=5|39=1|38=80|14=40|151=40|6=24.90|',
     explanation: 'The broker accepts C42-R1 as the working version. The first 40 shares still count toward the new total of 80.',
     status: 'Partially filled · replaced', filled: 40, open: 40, total: 80,
+  }],
+  replaceRejected: [sent, accepted, partial, {
+    direction: toBroker, title: 'Ask to reduce the order to 30',
+    tags: '35=G|11=C42-R2|41=C42|37=B510|38=30|40=2|44=25.00|',
+    explanation: 'The requested total is below the 40 shares that have already traded.',
+    status: 'Partially filled · replace sent', filled: 40, open: 60,
+  }, {
+    direction: toApp, title: 'Reject the replacement',
+    tags: '35=9|11=C42-R2|41=C42|37=B510|39=1|434=2|102=2|58=Total below filled quantity|',
+    explanation: 'The change failed. C42 remains the active ID, 40 shares are filled, and the original 60 remain open.',
+    status: 'Partially filled · replace rejected', filled: 40, open: 60,
   }],
   reject: [sent, {
     direction: toApp, title: 'Reject the new order',

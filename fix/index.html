@@ -94,6 +94,10 @@
             <div><h3>Application messages</h3><p>Carry trading instructions and events. Examples include New Order Single and Execution Report.</p></div>
           </div>
           <p>A <strong>FIX engine</strong> typically handles encoding, validation and session mechanics. The trading application decides what orders to send and how to update its order ledger. The matching engine at a venue determines which orders trade.</p>
+          <details>
+            <summary>Why brokers agreed on a shared protocol</summary>
+            <p>FIX began in the early 1990s with electronic equity trading. A fund connected to ten brokers can share its FIX encoder, session engine and core order model across those connections. Each broker still has its own message rules, limits and certification tests. The same approach later expanded to other instruments, market data and the work that follows a trade. <a href="https://fixtrading.org/standards/fix-protocol/">FIX Trading Community protocol history</a>.</p>
+          </details>
         </section>
 
         <section class="chapter" id="wire">
@@ -172,6 +176,7 @@
               <option value="cancel">Cancel the remaining 60</option>
               <option value="race">The fill beats the cancel</option>
               <option value="replace">Reduce the total order to 80</option>
+              <option value="replaceRejected">Try reducing the total below 40 filled</option>
               <option value="reject">The broker rejects the order</option>
             </select>
             <div class="step-counter" id="order-step"></div>
@@ -208,8 +213,20 @@
           <p><strong>LastQty</strong> (<code>32</code>) is this trade’s size. <strong>CumQty</strong> (<code>14</code>) is filled so far. <strong>LeavesQty</strong> (<code>151</code>) is still open for execution. The second fill brings the total to <code>40 + 60 = 100</code>. The weighted average is <code>(40 × $24.90 + 60 × $25.00) / 100 = $24.96</code>. On cancellation after 40 traded, CumQty stays 40 and LeavesQty becomes 0 because the other 60 can no longer trade.</p>
           <details>
             <summary>Which identifier follows what?</summary>
-            <p><code>11=ClOrdID</code> is assigned by the client to a request. <code>37=OrderID</code> comes from the broker or venue. <code>17=ExecID</code> identifies a report in the sender’s applicable scope. Those scopes and any stability across updates or feeds come from the counterparty spec. <code>34=MsgSeqNum</code> belongs to one direction of the session and advances across orders and admin messages.</p>
+            <p><code>11=ClOrdID</code> is assigned by the client to a request. <code>37=OrderID</code> comes from the broker or venue. <code>17=ExecID</code> identifies individual fills and many other execution reports. A FIX 4.4 order-status response instead uses <code>17=0</code>. Identification scope and stability across feeds come from the counterparty spec. <code>34=MsgSeqNum</code> belongs to one direction of the session and advances across orders and admin messages.</p>
             <p>A cancel (<code>35=F</code>) or replace (<code>35=G</code>) gets its own new ClOrdID and uses <code>41=OrigClOrdID</code> to reference the order being changed. After a successful replace from <code>C42</code> to <code>C42-R1</code>, a later cancel in this flow references <code>C42-R1</code>. Follow the venue’s rules for overlapping requests and identifier scope.</p>
+          </details>
+          <details>
+            <summary>How can I read a complete cancel or replace request?</summary>
+            <p>These are the application fields. The FIX engine supplies the standard session header and trailer. Carry forward the symbol, side and other fields required by your counterparty. Use the active order ID chain and give each request its own <code>11</code>.</p>
+            <pre class="field-trace"><code>Cancel remainder
+35=F|<wbr>11=C42-C1|<wbr>41=C42|<wbr>55=ACME|<wbr>54=1|<wbr>38=100|<wbr>
+60=20261124-14:30:05.000|<wbr>
+
+Replace with total quantity 80
+35=G|<wbr>11=C42-R1|<wbr>41=C42|<wbr>55=ACME|<wbr>54=1|<wbr>38=80|<wbr>
+40=2|<wbr>44=25.00|<wbr>59=0|<wbr>60=20261124-14:30:05.000|<wbr></code></pre>
+            <p>A Pending Replace report (<code>150=E|39=E</code>) still reflects the original working terms. The successful replacement (<code>150=5</code>) brings the open quantity from 60 to 40. In the rejected branch, requesting total 30 clashes with the 40 that already traded. A Cancel Reject with <code>434=2</code> identifies the failed replace and leaves the original order working. <a href="https://archive.fixtrading.org/online-specification/business-area-trade/">FIX Trade specification</a>.</p>
           </details>
           <details>
             <summary>What if an order fills while a cancel is pending?</summary>
@@ -227,7 +244,7 @@
               <li><code>35=3</code> <strong>Session Reject</strong> can flag a protocol violation, such as an invalid tag value. Look for <code>45</code> (reference sequence number), <code>371</code> (reference tag) and <code>373</code> (session reject reason) when present.</li>
               <li><code>35=8</code> with <code>150=8</code> and <code>39=8</code> reports a rejected new order in this model, for example when it fails the broker’s pre-trade checks. Check <code>103</code> and <code>58</code> when present.</li>
               <li><code>35=9</code> <strong>Order Cancel Reject</strong> rejects a cancel or replace request and reports the order’s current status. Check <code>434</code> for which request type and <code>102</code> for the reason when provided.</li>
-              <li><code>35=j</code> <strong>Business Message Reject</strong> covers application messages for which a more specific rejection mechanism doesn’t apply. One example is an unsupported application message type under the agreed profile. <a href="https://archive.fixtrading.org/online-specification/business-area-trade/">FIX application trade specification</a>.</li>
+              <li><code>35=j</code> <strong>Business Message Reject</strong> covers application messages for which a more specific rejection mechanism doesn’t apply. Read <code>372=RefMsgType</code>, <code>380=BusinessRejectReason</code>, and, when supplied, <code>45=RefSeqNum</code> and <code>379=BusinessRejectRefID</code>. For example, <code>35=j|45=12|372=B|380=3|</code> references sequence 12 and says that the peer doesn’t support application message type <code>B</code> (News). <a href="https://archive.fixtrading.org/online-specification/business-area-trade/">FIX application trade specification</a>.</li>
             </ul>
           </details>
         </section>
@@ -235,6 +252,18 @@
         <section class="chapter" id="sessions">
           <h2>Recover a missing fill</h2>
           <p>A <strong>FIX session</strong> is a numbered conversation between two systems. The <strong>initiator</strong> (here the trading app) opens a network connection to the <strong>acceptor</strong> (the broker) and sends Logon (<code>35=A</code>). The broker acknowledges with its own Logon. Once synchronized, either side can send messages, including a fill that arrives minutes after the order. When idle, they use Heartbeat (<code>35=0</code>) at the agreed interval (<code>108</code>). A Test Request (<code>35=1</code>) asks for a heartbeat echoing its <code>112=TestReqID</code>. Logout (<code>35=5</code>) closes a connection cleanly when possible.</p>
+          <details>
+            <summary>Read a complete session handshake and liveness check</summary>
+            <p>In this separate demonstration, each side starts at sequence 1. The client sends a test request on demand and the broker returns a heartbeat carrying the same identifier. These are full frames. Replace each pipe with SOH and omit the display line breaks when counting bytes.</p>
+            <pre class="admin-frames" tabindex="0" aria-label="Complete Logon, liveness check and Logout FIX frames"><code>8=FIX.4.4|9=67|35=A|49=CLIENT|56=BROKER|34=1|52=20261124-14:30:00.000|98=0|108=30|10=113|
+8=FIX.4.4|9=67|35=A|49=BROKER|56=CLIENT|34=1|52=20261124-14:30:00.000|98=0|108=30|10=113|
+8=FIX.4.4|9=55|35=0|49=BROKER|56=CLIENT|34=2|52=20261124-14:30:30.000|10=072|
+8=FIX.4.4|9=66|35=1|49=CLIENT|56=BROKER|34=2|52=20261124-14:30:35.000|112=PING-1|10=174|
+8=FIX.4.4|9=66|35=0|49=BROKER|56=CLIENT|34=3|52=20261124-14:30:35.000|112=PING-1|10=174|
+8=FIX.4.4|9=55|35=5|49=CLIENT|56=BROKER|34=3|52=20261124-14:31:00.000|10=076|
+8=FIX.4.4|9=55|35=5|49=BROKER|56=CLIENT|34=4|52=20261124-14:31:00.000|10=077|</code></pre>
+            <p><code>98=0</code> means no encryption inside the FIX message. TLS, when configured, protects the transport separately. A negotiated <code>108=30</code> means 30 seconds. Any valid inbound traffic gives evidence of liveness. Without traffic, the engine applies the profile’s timers to send a Test Request and eventually disconnect if the peer stays silent. <a href="https://fixtrading.org/standards/fixsession/">FIX Session Layer standard</a> · <a href="../fix-engine/fix-engine-java/#liveness-lab">Run a heartbeat timeout in Java</a>.</p>
+          </details>
           <figure class="diagram sequences">
             <div class="sequence-line"><strong>App → Broker</strong><ol role="list"><li><b>1</b> Logon</li><li><b>2</b> New order</li></ol></div>
             <div class="sequence-line"><strong>Broker → App</strong><ol role="list"><li><b>1</b> Logon</li><li><b>2</b> Accepted</li><li><b>3</b> 40 traded</li></ol></div>
@@ -294,8 +323,9 @@
           <p>When reading a spec, start with its <strong>session rules</strong> (IDs, version, credentials, schedule and recovery). Next read the <strong>message tables</strong> for one complete workflow, including rejects and conditional fields. Finally, check <strong>certification scenarios</strong> with the counterparty’s test environment and assert both the messages and the resulting order state. For a cancel test, verify the final open quantity and whether any fill arrived while the cancel was pending.</p>
           <details>
             <summary>Where do FIXT.1.1, TLS and FIX Latest fit?</summary>
-            <p><code>FIX.4.4</code> here identifies the session profile and application version. With <code>FIXT.1.1</code>, the session protocol is versioned independently. Logon can carry <code>1137=DefaultApplVerID</code> to declare the default application version, for example <code>9</code> for FIX 5.0 SP2. FIX Latest evolves through extension packs. Read the negotiated application profile and venue extensions before decoding business fields. <a href="https://fixtrading.org/standards/fixsession/">FIX Session and FIXT specifications</a>.</p>
-            <p>TLS protects the network link. FIX-over-TLS (FIXS) describes interoperable ways to secure FIX sessions, including options for client authentication at the FIX session layer. Use the counterparty’s test endpoints and credential rules, and redact sensitive logon data from shared traces. <a href="https://fixtrading.org/standards/fixs/">FIX-over-TLS standard</a>.</p>
+            <p><code>FIX.4.4</code> here identifies the session profile and application version. With <code>FIXT.1.1</code>, Logon (<code>8=FIXT.1.1|35=A|…|1137=9</code>, selected fields) declares FIX 5.0 SP2 as the sender’s default application version. A following order can use that default, or use header <code>1128=6</code> to select FIX 4.4 where the counterparty allows it. The sequence numbers continue in the same session.</p>
+            <p>Extension packs are published updates to the FIX standard. FIXT can describe an extension and a bilateral custom application version with <code>1156=ApplExtID</code> and <code>1129=CstmApplVerID</code>, respectively. Logon defaults use their corresponding default fields, <code>1407</code> and <code>1408</code>, where supported. Obtain the exact venue profile and dictionary rather than inferring supported fields from <code>8</code>. <a href="https://fixtrading.org/standards/fixsession/">FIX Session and FIXT specifications</a> · <a href="https://fixtrading.org/standards/extension-packs/">FIX extension packs</a>.</p>
+            <p>TLS protects the network link. FIX-over-TLS (FIXS) describes interoperable ways to secure it. With mutual TLS, both peers authenticate with certificates. FIX user authentication (FIXA) authenticates the client within the protected FIX session in supported profiles. Use your counterparty’s test endpoints and credential rules and redact Logon secrets from shared traces. <a href="https://fixtrading.org/standards/fixs/">FIX-over-TLS standard</a>.</p>
           </details>
         </section>
 
@@ -303,28 +333,99 @@
           <h2>Explore other FIX workflows</h2>
           <p>Order entry tells you what happened to <em>your order</em>. The same protocol family can also describe the market around the order, a dealer’s price for a proposed trade, or what happens after execution. Counterparties often put these workflows on separate interfaces with separate state and recovery rules.</p>
           <div class="workflow-list">
-            <details open>
+            <details id="matching">
+              <summary>Matching · Which orders trade first?</summary>
+              <p>A central limit order book keeps resting buy and sell orders for each instrument. In this price–time example, the highest bid and lowest offer have priority. Among orders at the same price, the earlier one goes first. An incoming buy can cross an offer at or below its limit. An incoming sell can cross a bid at or above its limit. Each trade has size <code>min(buy open, sell open)</code> and uses the resting order’s price in this example.</p>
+              <div class="table-wrap" tabindex="0" role="region" aria-label="Two-sided matching example">
+                <table>
+                  <thead><tr><th scope="col">Before C42 arrives</th><th scope="col">Price</th><th scope="col">Open shares</th><th scope="col">After C42 arrives</th></tr></thead>
+                  <tbody>
+                    <tr><th scope="row">Sell S1, arrived first</th><td>$24.90</td><td>20</td><td>Trades first, 0 open</td></tr>
+                    <tr><th scope="row">Sell S2, arrived later</th><td>$24.90</td><td>20</td><td>Trades next, 0 open</td></tr>
+                    <tr><th scope="row">Sell S3</th><td>$25.10</td><td>60</td><td>Above C42’s limit, 60 open</td></tr>
+                    <tr><th scope="row">Buy C42</th><td>$25.00</td><td>100 incoming</td><td>40 filled at $24.90, 60 rest at $25.00</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <p>The venue sends an execution report to each side of each trade. The buy’s cumulative fill rises 0 → 20 → 40. Each seller’s report concerns its own order. The original C42 walkthrough combined the two offers into one 40-share fill for readability. Queue priority after a replace depends on the venue. <a href="../fix-engine/fix-engine-java/#order-workflow">Run the two-client matching lab</a>.</p>
+            </details>
+            <details id="market-data" open>
               <summary>Market data · What can I buy or sell?</summary>
-              <p>In a FIX snapshot-and-updates feed, a Market Data Request (<code>35=V</code>) can subscribe to a symbol. A Snapshot (<code>35=W</code>) gives a full view of the subscribed portion of the book, such as the best five prices on each side. It can carry bids and offers in a <a href="#repeating-groups">repeating group</a>. An Incremental Refresh (<code>35=X</code>) can add, change or remove individual entries while the other entries stay in place.</p>
+              <p>A Market Data Request (<code>35=V</code>) can ask for one snapshot (<code>263=0</code>), subscribe (<code>263=1</code>), or stop the subscription (<code>263=2</code>). Tag <code>262</code> identifies the request. <code>264=0</code> requests the full book, <code>264=1</code> requests the best level on each side, and <code>264=2</code> requests up to two levels per side. For a subscription, <code>265=0</code> asks for full refreshes and <code>265=1</code> asks for incremental changes. The groups <code>267</code> and <code>146</code> list entry types and instruments. A <code>Y</code> response explains why a subscription failed, for example <code>281=0</code> for an unknown symbol.</p>
+              <pre class="field-trace"><code>Subscribe
+35=V|<wbr>262=M42|<wbr>263=1|<wbr>264=2|<wbr>265=1|<wbr>266=Y|<wbr>267=2|<wbr>269=0|<wbr>269=1|<wbr>146=1|<wbr>55=ACME|<wbr>
+Snapshot
+35=W|<wbr>262=M42|<wbr>55=ACME|<wbr>268=3|<wbr>269=0|<wbr>270=24.80|<wbr>271=200|<wbr>
+269=1|<wbr>270=24.90|<wbr>271=40|<wbr>269=1|<wbr>270=25.10|<wbr>271=60|<wbr>
+Delete
+35=X|<wbr>262=M42|<wbr>268=1|<wbr>279=2|<wbr>269=1|<wbr>55=ACME|<wbr>270=24.90|<wbr></code></pre>
               <div class="market-example">
                 <div><strong>Snapshot</strong><span>Offer $24.90 × 40</span><span>Offer $25.10 × 60</span></div>
                 <div><strong>Incremental change</strong><span>Remove $24.90 offer</span></div>
                 <div><strong>Updated view</strong><span>Best offer $25.10 × 60</span></div>
               </div>
-              <p>A vanished offer can result from trades or canceled interest. Look to your own execution reports to confirm your fill. If you miss a required update, re-establish the book from an appropriate snapshot and correctly sequenced updates per the feed spec. <a href="https://www.fixtrading.org/wp-content/uploads/download-manager-files/MDOWG_Book_Mgt-v20.pdf">FIX recommended practices for book management</a>.</p>
+              <p><code>W</code> replaces the subscribed view. <code>X</code> applies changes with <code>279=0/1/2</code> for add, change or delete. This aggregated example identifies a level by instrument, side and price. Other profiles may identify incremental entries with <code>278</code> and references with <code>280</code>. The base FIX 4.4 snapshot group lacks <code>278</code>. A book can also publish trades, auction data or statistics, with their own entry types.</p>
+              <p>A vanished offer might reflect a trade or cancellation. Check your own execution report to know if you filled. If you miss a required update, mark the view stale, re-establish it from the appropriate snapshot and then apply correctly sequenced updates. <a href="https://www.fixtrading.org/wp-content/uploads/download-manager-files/MDOWG_Book_Mgt-v20.pdf">FIX book management practices</a> · <a href="../fix-engine/fix-engine-java/#matching-to-feed">Trace the effect of orders, fills and cancels on a feed</a> · <a href="../fix-engine/fix-engine-java/#market-workflow">Run the subscription and recovery lab</a>.</p>
             </details>
-            <details>
+            <details id="rfq">
               <summary>RFQ · What price will a dealer quote me?</summary>
-              <p>In a <strong>request for quote</strong> workflow, a client may ask a dealer for a price on a specific instrument and quantity (<code>35=R</code>). A Quote (<code>35=S</code>) can carry a price, size and quote identifier. How to accept, expiry and whether a quote is firm depend on the agreed workflow. For example, ask for a price on a specific size of a bond and use the returned quote ID if the venue requires it for acceptance. <a href="https://archive.fixtrading.org/online-specification/business-area-trade/">FIX trade and quote workflows</a>.</p>
+              <p>A bond desk may ask several dealers for a price on a particular instrument, side and size. This is a <strong>request for quote</strong>. A dealer can quote both a bid and an offer for that client. An indicative quote gives a price indication. A firm quote can be accepted under its size, expiry and counterparty rules. An order book instead matches incoming orders against available resting interests under venue rules.</p>
+              <pre class="field-trace"><code>Ask
+35=R|<wbr>131=R1|<wbr>146=1|<wbr>55=BOND-DEMO|<wbr>54=1|<wbr>38=10|<wbr>
+Quote
+35=S|<wbr>131=R1|<wbr>117=Q1|<wbr>537=1|<wbr>132=99.25|<wbr>133=99.50|<wbr>134=10|<wbr>135=10|<wbr>62=…|<wbr>
+Accept
+35=D|<wbr>11=TAKE-Q1|<wbr>117=Q1|<wbr>40=D|<wbr>54=1|<wbr>38=10|<wbr>44=99.50|<wbr>
+Or withdraw
+35=Z|<wbr>131=R1|<wbr>117=Q1|<wbr>298=1|<wbr>295=1|<wbr>55=BOND-DEMO|<wbr>
+Quote status
+35=AI|<wbr>131=R1|<wbr>117=Q1|<wbr>55=BOND-DEMO|<wbr>297=1|<wbr></code></pre>
+              <p>These are selected application fields for one bilateral profile. <code>131</code> tracks the request and <code>117</code> the returned quote. <code>62</code> is ValidUntilTime. In this profile an order references the quote at the offered price. Another may use Quote Response. If expired or withdrawn, the dealer rejects the attempted acceptance. <code>298</code> gives the withdrawal scope. Use <code>298=1</code> for the listed instrument or <code>298=4</code> for all quotes in the agreed scope, such as a dealer’s quotes on this session. <code>AI</code> can report the result where supported. The separate <code>299=QuoteEntryID</code> identifies an entry in a quote set. <a href="https://orchimate.org/fixtrading/fix-4.4/messages/QuoteCancel">FIX 4.4 QuoteCancel</a> · <a href="../fix-engine/fix-engine-java/#market-workflow">Run the quote lifecycle lab</a>.</p>
             </details>
-            <details>
+            <details id="post-trade">
               <summary>Drop copy and post-trade · What gets booked?</summary>
-              <p><strong>Drop copy</strong> is a separate stream that can deliver copies of order or execution events to risk and reconciliation systems. NYSE Pillar can deliver copies of activity from its binary order gateway over a separate FIX interface. The configured scope can cover fills only or a broader set of order events. <a href="https://beta.nyse.com/publicdocs/nyse/NYSE_Pillar_Gateway_Binary_Protocol_Specification.pdf">NYSE Pillar Binary Gateway specification, §7.4</a>.</p>
-              <p>A Trade Capture Report (<code>AE</code>) describes a trade under the applicable trade-reporting workflow. After C42 fills, a manager could allocate 70 shares to one account and 30 to another at the agreed average price. Allocation Instruction (<code>J</code>) and its acknowledgement (<code>P</code>) are examples. An account-level Confirmation (<code>AK</code>) can communicate the agreed terms, and Confirmation Ack (<code>AU</code>) can affirm or reject them. Settlement is the later exchange of securities and cash. <a href="https://www.fixtrading.org/wp-content/uploads/download-manager-files/FIX-Latest-Specification-PostTrade.pdf">FIX post-trade specification</a>.</p>
+              <p><strong>Drop copy</strong> is a separate stream that can deliver copies of order or execution events to risk and reconciliation systems. NYSE Pillar can deliver copies of activity from its binary order gateway over a FIX interface. The configured scope can cover fills only or a broader set of order events. Compare the primary and drop-copy event IDs in their agreed scopes. If the sides disagree, investigate the source of the missing or duplicated event before using the aggregate position. <a href="https://beta.nyse.com/publicdocs/nyse/NYSE_Pillar_Gateway_Binary_Protocol_Specification.pdf">NYSE Pillar Binary Gateway specification, §7.4</a>.</p>
+              <p>A <strong>Trade Capture Report</strong> (<code>AE</code>) describes a trade, whereas an Execution Report can also acknowledge or update a working order. Under a supported profile, a Trade Capture Report Request (<code>AD</code>) can request historical or streaming trade records. For C42, reconcile reports TR1 (40 at $24.90) and TR2 (60 at $25.00) to the 100 shares and $2,496 traded value before allocating.</p>
+              <ol>
+                <li><strong>Allocate.</strong> An Allocation Instruction (<code>J</code>) with <code>70=A42</code> splits 100 shares using an account group (<code>78=2</code>). Fund A gets 70 and Fund B gets 30. An instruction can also specify allocations before execution under some profiles. Link the order and execution IDs so two similar blocks don’t get confused.</li>
+                <li><strong>Check the booking response.</strong> An Allocation Instruction Ack (<code>P</code>) can say received, accepted or rejected through <code>87</code> and explain failures through <code>88</code>. An Allocation Report (<code>AS</code>) can send account detail, including <code>153</code> for the allocation’s average price and <code>154</code> for the account’s net cash amount. Its <code>755=AllocReportID</code> is the report’s own ID. A separate <code>AT</code> can acknowledge the report.</li>
+                <li><strong>Confirm each account.</strong> The broker sends <code>AK</code> with <code>664=ConfirmID</code>, the allocation reference, account, quantity, price and cash amounts. With a fee of $0.01 per share, Fund A’s gross $1,747.20 becomes $1,747.90 net. Fund B’s gross $748.80 becomes $749.10 net. In <code>AU</code>, tag <code>940=3</code> affirms and <code>940=2</code> rejects. If Fund B rejects an incorrect account, a revised <code>AK</code> links back with <code>772=ConfirmRefID</code>.</li>
+                <li><strong>Reconcile positions.</strong> An <code>AN</code> positions request can lead to an <code>AP</code> report. Match the request with <code>710</code> and check the clearing business date (<code>715</code>), account and instrument. Read long and short quantities (<code>704/705</code>) in the <code>702</code> position group. This example ends at Fund A long 70 and Fund B long 30. Settlement is the later movement of securities and cash. A rejected or unconfirmed allocation can still represent economic exposure before it is ready to settle.</li>
+              </ol>
+              <p>Other post-trade profiles cover standing settlement instructions, settlement status, registrations, collateral, margin, account reporting, adjustments and cash movements. Their exact workflows vary by asset and participants. <a href="https://fixtrading.org/guidelines/post-trade/">FIX post-trade workflows</a> · <a href="../fix-engine/fix-engine-java/#post-trade-workflow">Run the post-trade lab</a>.</p>
             </details>
-            <details>
-              <summary>Risk and order management · What can be sent or canceled?</summary>
-              <p>Pre-trade checks can block an order that exceeds permitted size, price or exposure before routing. A status request (<code>H</code>) can ask for a particular order’s state where supported. Mass cancel (<code>q</code>) can request cancellation of a specified scope where supported. Verify the scope and individual outcomes before treating open orders as canceled. An order router can choose among venues and track the venue orders it creates. <a href="https://archive.fixtrading.org/online-specification/business-area-trade/">FIX order-handling messages</a>.</p>
+            <details id="risk-and-routing">
+              <summary>Risk, status and routing · What should the app do next?</summary>
+              <p><strong>Pre-trade risk</strong> is the set of checks before an order is released. C42’s maximum limit notional is <code>100 × $25.00 = $2,500</code>. A broker with a $2,000 order limit rejects it before it enters the book. Other checks cover size, prices outside a collar around a fresh reference, aggregate credit, position plus working exposure, and daily traded volume. Checks may run at the client, broker and venue. A <strong>kill switch</strong> first blocks further admissions for its scope. It can then request cancellation and verify working orders actually closed. Previously executed trades still stand.</p>
+              <pre class="field-trace"><code>Request status
+35=H|<wbr>11=C42|<wbr>55=ACME|<wbr>54=1|<wbr>790=Q42|<wbr>
+Report status
+35=8|<wbr>11=C42|<wbr>790=Q42|<wbr>17=0|<wbr>150=I|<wbr>39=1|<wbr>14=40|<wbr>151=60|<wbr>
+Mass cancel
+35=q|<wbr>11=KILL-1|<wbr>530=1|<wbr>55=ACME|<wbr>
+Scope report
+35=r|<wbr>11=KILL-1|<wbr>530=1|<wbr>531=1|<wbr>533=1|<wbr>
+Order closed
+35=8|<wbr>11=C42|<wbr>150=4|<wbr>39=4|<wbr>14=40|<wbr>151=0|<wbr></code></pre>
+              <p><code>150=I</code> reports the status of an existing order. In FIX 4.4, the report uses <code>17=0</code> and echoes the supplied <code>790=Q42</code> to identify the request. The 40 shares are the current cumulative quantity. Only the underlying fills add to the ledger. For mass cancel, <code>530=1</code> means by security, <code>530=6</code> refers to a trading session, and <code>530=7</code> requests all orders within the applicable scope. Confirm scope, per-order reports and the final open quantity. Business state should be reconciled independently of session recovery. <a href="https://orchimate.org/fixtrading/fix-4.4/messages/ExecutionReport">FIX 4.4 Execution Report</a> · <a href="https://archive.fixtrading.org/online-specification/business-area-trade/">FIX Trade specification</a>.</p>
+              <p>A <strong>smart order router</strong> chooses where to place an order. Suppose A shows 70 shares at $24.99 plus $0.04 fee, and B shows 60 at $25.00 plus $0.01. For a 100-share buy with a $25.05 limit in this toy market, route 60 to B at effective $25.01 and 40 to A at effective $25.03. If B only fills 40, reserve the 20 still working there until its outcome is confirmed. A stale quote or uncertain cancel changes what is safe to route.</p>
+              <p>An <strong>execution algorithm</strong> controls how a parent order is worked over time. A simple time-weighted strategy can release four 25-share orders at 0, 15, 30 and 45 seconds. FIXatdl lets a broker describe named strategies, inputs, validation and UI controls in XML. A venue’s contract defines how those inputs map to FIX fields. <a href="https://fixtrading.org/packages/fixatdl-1-1-overview/">FIXatdl overview</a> · <a href="../fix-engine/fix-engine-java/#routing-workflow">Run the routing and slicing exercise</a>.</p>
+            </details>
+            <details id="instruments">
+              <summary>Instruments · What changes beyond shares?</summary>
+              <p>Most workflows still need an instrument, side and quantity. The instrument profile determines what those values mean and which fields identify the tradable contract. For example, buying two futures contracts at 5,000.25 with a multiplier of 50 represents $500,025 of price × multiplier × contracts exposure in this example. The cash margin is a separate quantity.</p>
+              <div class="table-wrap" tabindex="0" role="region" aria-label="Instrument fields by asset class">
+                <table>
+                  <thead><tr><th scope="col">Asset</th><th scope="col">Example of what the venue may require</th></tr></thead>
+                  <tbody>
+                    <tr><th scope="row">Equity</th><td>Security identifier and source (<code>48/22</code>), currency, quantity in shares.</td></tr>
+                    <tr><th scope="row">Bond or repo</th><td>Maturity date (<code>541</code>), coupon (<code>223</code>), yield terms, settlement and quantity in face amount.</td></tr>
+                    <tr><th scope="row">Futures and listed options</th><td>Contract month (<code>200</code>), multiplier (<code>231</code>), option strike (<code>202</code>) and put/call where applicable.</td></tr>
+                    <tr><th scope="row">FX and OTC products</th><td>Currency pair, base/terms quantities, settlement dates (<code>64</code>), and leg or underlying details for forwards, swaps and options.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <p>A multi-asset gateway can route by session profile and normalized instrument type, including <code>167=SecurityType</code> where supplied. Compare executable size, fees, hours and liquidity in the relevant units. Retain routing decisions and execution evidence for transaction cost analysis. <a href="https://fixtrading.org/standards/fix-protocol/">FIX standards and business areas</a> · <a href="../fix-engine/fix-engine-java/#version-profiles">Inspect the futures order in the Java FIXT lab</a>.</p>
             </details>
           </div>
         </section>
