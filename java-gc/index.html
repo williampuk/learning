@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#11151b">
-  <meta name="description" content="Follow a web request through a toy Java heap, decode a real JDK 25 GC log, and compare six HotSpot collectors.">
+  <meta name="description" content="Start with Spring Boot request allocations in Java GC Foundations, then explore a JDK 25 GC log and the HotSpot collector roadmap.">
   <title>Java Garbage Collection</title>
   <link rel="stylesheet" href="./lesson.css">
   <script src="./heap-lab.js" defer></script>
@@ -19,6 +19,7 @@
         Interactive Learning
       </a>
       <nav class="outline" aria-label="Guide sections">
+        <a href="./00-gc-foundations.html">Foundations</a>
         <a href="#heap">Heap lab</a>
         <a href="#collectors">Collectors</a>
         <a href="#logs">GC logs</a>
@@ -33,9 +34,9 @@
         <div class="hero-copy">
           <p class="eyebrow">JDK 25 · HotSpot JVM</p>
           <h1>Java Garbage Collection</h1>
-          <p class="hero-lead">Your checkout API slows down during a traffic burst. What happens to all the objects those requests create, and how can you tell whether garbage collection contributed to the slowdown?</p>
+          <p class="hero-lead">Your Spring Boot orders API slows down during a traffic burst. Start with the objects one request creates, then see how Java reclaims memory, what happens when a cache holds on to it, and how to read a GC log.</p>
           <div class="hero-actions">
-            <a class="button primary" href="#heap">Try the heap lab <span aria-hidden="true">↓</span></a>
+            <a class="button primary" href="./00-gc-foundations.html">Start GC Foundations <span aria-hidden="true">→</span></a>
             <a class="text-link" href="#collectors">Compare collectors <span aria-hidden="true">→</span></a>
           </div>
           <p class="prerequisite">You’ll need basic Java objects, references, and HTTP request handling.</p>
@@ -138,9 +139,9 @@
           <p>Every collector makes a different trade-off among <strong>throughput</strong> (requests or jobs completed per unit time), <strong>pause time</strong> (time application threads are stopped), and <strong>memory footprint</strong>. Concurrent phases overlap with application work and compete for resources. A <strong>stop-the-world</strong> phase suspends application threads.</p>
         </div>
 
-        <a class="foundation" href="#heap">
-          <strong>Foundations · The web-request heap</strong>
-          <span>Trace allocations, references, and promotion <span aria-hidden="true">↑</span></span>
+        <a class="foundation" href="./00-gc-foundations.html">
+          <strong>Foundations · From request to garbage</strong>
+          <span>Follow a Spring Boot request, run a traffic burst, and watch a cache retain objects <span aria-hidden="true">→</span></span>
         </a>
         <p class="roadmap-note">The six collector lessons are planned. The commands here use the JDK 25 HotSpot baseline.</p>
         <ul class="collector-grid" role="list">
