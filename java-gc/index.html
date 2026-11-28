@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#11151b">
+  <meta name="description" content="Follow a web request through a toy Java heap, decode a real JDK 25 GC log, and compare six HotSpot collectors.">
+  <title>Java Garbage Collection</title>
+  <link rel="stylesheet" href="./lesson.css">
+  <script src="./heap-lab.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to the guide</a>
+  <header class="site-header">
+    <div class="shell topbar">
+      <a class="brand" href="../">
+        <span class="brand-mark" aria-hidden="true"></span>
+        Interactive Learning
+      </a>
+      <nav class="outline" aria-label="Guide sections">
+        <a href="#heap">Heap lab</a>
+        <a href="#collectors">Collectors</a>
+        <a href="#logs">GC logs</a>
+        <a href="#review">Review</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <div class="hero-frame">
+      <div class="shell hero">
+        <div class="hero-copy">
+          <p class="eyebrow">JDK 25 · HotSpot JVM</p>
+          <h1>Java Garbage Collection</h1>
+          <p class="hero-lead">Your checkout API slows down during a traffic burst. What happens to all the objects those requests create, and how can you tell whether garbage collection contributed to the slowdown?</p>
+          <div class="hero-actions">
+            <a class="button primary" href="#heap">Try the heap lab <span aria-hidden="true">↓</span></a>
+            <a class="text-link" href="#collectors">Compare collectors <span aria-hidden="true">→</span></a>
+          </div>
+          <p class="prerequisite">You’ll need basic Java objects, references, and HTTP request handling.</p>
+        </div>
+
+        <figure class="snapshot">
+          <div class="snapshot-head">
+            <span><span class="signal" aria-hidden="true"></span> Toy heap snapshot</span>
+            <span class="snapshot-count">6 / 12 occupied</span>
+          </div>
+          <div class="snapshot-map" aria-hidden="true">
+            <div class="snapshot-generation">
+              <div class="snapshot-label"><span>Young generation</span><span>4 / 8</span></div>
+              <div class="snapshot-grid young">
+                <span class="dead"></span><span class="dead"></span><span class="live"></span><span class="live"></span>
+                <span></span><span></span><span></span><span></span>
+              </div>
+            </div>
+            <div class="snapshot-generation">
+              <div class="snapshot-label"><span>Old generation</span><span>2 / 4</span></div>
+              <div class="snapshot-grid">
+                <span class="live"></span><span class="live"></span><span></span><span></span>
+              </div>
+            </div>
+            <ul class="legend">
+              <li><span class="swatch live"></span>Reachable</li>
+              <li><span class="swatch dead"></span>Unreachable</li>
+              <li><span class="swatch"></span>Free</li>
+            </ul>
+          </div>
+          <figcaption>Two objects from a finished request can be reclaimed. The two from the running request and the two long-lived objects are still reachable.</figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <div class="shell lesson">
+      <section class="chapter" id="heap" aria-labelledby="heap-title">
+        <div class="section-heading">
+          <h2 id="heap-title">Follow a request through the heap</h2>
+          <p>Think of a checkout API as a kitchen. Each order gets a prep tray. When the order goes out, its tray can be cleared. The recipe binder stays on the shelf because the next order still needs it.</p>
+        </div>
+
+        <div class="heap-layout">
+          <div class="heap-explanation">
+            <h3>What can be cleared?</h3>
+            <p>The <strong>heap</strong> is the memory area where Java objects live. A collector follows references from known starting points called <strong>GC roots</strong>, such as references in live thread stacks. In this lesson we use ordinary strong references. If a root can reach an object, the collector must keep it.</p>
+            <p>A checkout handler creates a response object and a payload. When the request finishes, those objects can become <strong>unreachable</strong> and eligible for reclamation. If a long-lived cache still points to a payload, the collector must keep it even after the response is sent.</p>
+            <h3>Why collect young objects first?</h3>
+            <p>Many objects die soon after allocation. <strong>Generational collection</strong> groups objects by age so the JVM can collect the young generation frequently. Objects that survive enough collections may be <strong>promoted</strong> to the old generation. A young collection also accounts for references from old objects, including the cache in this lab.</p>
+          </div>
+
+          <div class="lab panel" id="heap-lab" hidden>
+            <div class="lab-header">
+              <div>
+                <h3>Request heap lab</h3>
+                <p>Collect once, then retain a payload before finishing its request. Which objects will the next collection reclaim?</p>
+              </div>
+              <button type="button" class="reset" id="reset-lab">Reset</button>
+            </div>
+            <dl class="metrics">
+              <div><dt>Occupied slots</dt><dd id="heap-used">6 / 12</dd></div>
+              <div><dt>Active requests</dt><dd id="request-count">1</dd></div>
+              <div><dt>Reclaimed so far</dt><dd id="reclaimed-count">0</dd></div>
+            </dl>
+            <div class="generation">
+              <h4>Young generation</h4>
+              <ol class="slot-grid" id="young-slots" role="list" aria-label="Young generation slots"></ol>
+            </div>
+            <div class="generation">
+              <h4>Old generation</h4>
+              <ol class="slot-grid" id="old-slots" role="list" aria-label="Old generation slots"></ol>
+            </div>
+            <div class="lab-actions" role="group" aria-label="Heap simulation controls">
+              <button type="button" class="primary" id="collect-young">Collect young generation</button>
+              <button type="button" id="send-requests">Send 2 requests</button>
+              <button type="button" id="finish-requests">Finish requests</button>
+              <button type="button" id="retain-payload">Retain a payload</button>
+              <button type="button" id="clear-cache">Clear cache entries</button>
+            </div>
+            <p class="status" id="lab-status" role="status" aria-atomic="true">Request 1 has finished. Request 2 is still active.</p>
+          </div>
+          <noscript><p class="note">Enable JavaScript to run the lab. The worked trace below follows the same starting heap and actions.</p></noscript>
+        </div>
+
+        <details class="worked">
+          <summary>Read the worked heap trace</summary>
+          <p>Each slot holds one object. Survivors can move to old after their second young collection if there is room. The model uses fixed-size slots and collects only the young generation.</p>
+          <ol>
+            <li>Start with six objects. Young holds the response and payload from each of two requests. Old holds the cache and app configuration. Request 1 has finished, so its two objects are unreachable.</li>
+            <li>Collect young. The collector reclaims request 1’s two objects. Request 2’s response and payload survive, leaving four occupied slots in total.</li>
+            <li>Retain request 2’s payload in the cache and finish the request. Collect young again. The response is reclaimed and the payload survives a second time, so it moves to old. Three slots remain occupied.</li>
+            <li>Clear the cache entries. The promoted payload is now unreachable, but it still occupies a slot. A collection that includes old can reclaim its space.</li>
+          </ol>
+        </details>
+      </section>
+
+      <section class="chapter" id="collectors" aria-labelledby="collectors-title">
+        <div class="section-heading">
+          <h2 id="collectors-title">The collector roadmap</h2>
+          <p>Every collector makes a different trade-off among <strong>throughput</strong> (requests or jobs completed per unit time), <strong>pause time</strong> (time application threads are stopped), and <strong>memory footprint</strong>. Concurrent phases overlap with application work and compete for resources. A <strong>stop-the-world</strong> phase suspends application threads.</p>
+        </div>
+
+        <a class="foundation" href="#heap">
+          <strong>Foundations · The web-request heap</strong>
+          <span>Trace allocations, references, and promotion <span aria-hidden="true">↑</span></span>
+        </a>
+        <p class="roadmap-note">The six collector lessons are planned. The commands here use the JDK 25 HotSpot baseline.</p>
+        <ul class="collector-grid" role="list">
+          <li class="collector">
+            <h3>Serial GC</h3>
+            <code>-XX:+UseSerialGC</code>
+            <p>One GC worker during pauses. A small single-CPU service or CLI can benefit from its low overhead. Larger collections may pause longer because one worker does the job.</p>
+          </li>
+          <li class="collector">
+            <h3>Parallel GC</h3>
+            <code>-XX:+UseParallelGC</code>
+            <p>Multiple GC workers collect during pauses. A nightly batch job can prioritize throughput when longer pauses are acceptable.</p>
+          </li>
+          <li class="collector">
+            <h3>G1 GC</h3>
+            <code>-XX:+UseG1GC</code>
+            <p>The typical server default. It divides the heap into regions, marks live data concurrently, and copies live objects out of selected regions during pauses. Its pause target is a goal.</p>
+          </li>
+          <li class="collector">
+            <h3>Generational ZGC</h3>
+            <code>-XX:+UseZGC</code>
+            <p>Moves objects concurrently to keep pauses short. Consider it when pauses matter and CPU and heap headroom allow collection to keep pace. JDK 24 removed the non-generational mode.</p>
+          </li>
+          <li class="collector">
+            <h3>Generational Shenandoah</h3>
+            <code>-XX:+UseShenandoahGC</code>
+            <code>-XX:ShenandoahGCMode=generational</code>
+            <p>Moves objects concurrently with low pauses as a goal. Use both flags to enable this mode on JDK 25 builds that include Shenandoah. Leave room for concurrent work and new allocations.</p>
+          </li>
+          <li class="collector">
+            <h3>Epsilon</h3>
+            <code>-XX:+UnlockExperimentalVMOptions</code>
+            <code>-XX:+UseEpsilonGC</code>
+            <p>Allocates memory without reclaiming it. Useful in bounded experiments, such as isolating collection costs. Continuing to allocate eventually exhausts the heap.</p>
+          </li>
+        </ul>
+        <p class="note">HotSpot typically selects G1 on server-class configurations and can select Serial on smaller ones. Check the runtime’s startup log to see what it picked. Concurrent Mark Sweep (CMS) was removed in JDK 14.</p>
+      </section>
+
+      <section class="chapter" id="logs" aria-labelledby="logs-title">
+        <div class="section-heading">
+          <h2 id="logs-title">Read your first GC log</h2>
+          <p>Start with the collector name. Run the command using the same JDK and runtime limits as the service. Look for a message such as <code>Using G1</code> to identify the collector chosen for that launch. To verify a deployed service’s actual settings, add logging to its own startup command.</p>
+        </div>
+        <pre class="terminal"><code>java -Xlog:gc -version</code></pre>
+
+        <div class="log-layout">
+          <div class="log-example panel">
+            <h3>A G1 young collection</h3>
+            <p>Captured on Temurin 25.0.4 with the example below.</p>
+            <pre><code>[0.372s][info][gc] GC(2) Pause Young (Normal) (G1 Evacuation Pause) 18M-&gt;5M(32M) 0.675ms</code></pre>
+            <details>
+              <summary><code>[0.372s][info][gc]</code></summary>
+              <p>The JVM had been running for 0.372 seconds when it logged this info-level GC event.</p>
+            </details>
+            <details>
+              <summary><code>GC(2) Pause Young (Normal)</code></summary>
+              <p>GC event 2 includes a stop-the-world young collection. During evacuation, G1 copies surviving objects out of the selected regions so it can reuse those regions.</p>
+            </details>
+            <details open>
+              <summary><code>18M-&gt;5M(32M) 0.675ms</code></summary>
+              <p>Used heap fell from about 18 MiB to 5 MiB, with 32 MiB of committed heap. The application pause lasted 0.675 milliseconds.</p>
+            </details>
+          </div>
+          <div class="log-reading">
+            <h3>Connect the pause to the symptom</h3>
+            <p>Line up GC events with slow requests using timestamps from the same process and time window. A brief pause can contribute to request queuing. Also inspect CPU saturation and upstream latency before attributing a spike to GC.</p>
+            <p>Compare heap usage after like-for-like collections under similar load. Frequent drops back to a stable level can indicate heavy temporary allocation. A rising baseline after collections that reclaim old objects can indicate a growing live set, such as an unbounded cache.</p>
+            <p>Use <code>-Xlog:gc*</code> for more detail, including G1’s phase and heap summaries. When request logs use wall-clock timestamps, specify <code>-Xlog:gc:stdout:time,uptime,level,tags</code> to include both wall time and JVM uptime.</p>
+          </div>
+        </div>
+
+        <details class="worked" id="run-example">
+          <summary>Run the allocation example on JDK 25</summary>
+          <p>Save this as <code>GcRequests.java</code>. Each iteration creates a 16 KiB payload and replaces the last one, leaving only the newest payload reachable through the field.</p>
+          <pre class="terminal" tabindex="0" aria-label="GcRequests.java source"><code>public class GcRequests {
+    private static volatile byte[] latestPayload;
+
+    public static void main(String[] args) {
+        for (int request = 0; request &lt; 10_000; request++) {
+            latestPayload = new byte[16 * 1024];
+        }
+        System.out.println("Processed 10,000 simulated requests");
+    }
+}</code></pre>
+          <pre class="terminal" tabindex="0" aria-label="Command to run the example"><code>java -Xms32m -Xmx32m -XX:+UseG1GC -Xlog:gc GcRequests.java</code></pre>
+          <p>Expect a <code>Using G1</code> startup line, several young collections, and <code>Processed 10,000 simulated requests</code>. Heap figures and timings vary between runs. The JVM and source launcher perform their own allocations too.</p>
+        </details>
+      </section>
+
+      <section class="chapter" id="review" aria-labelledby="review-title">
+        <div class="section-heading">
+          <h2 id="review-title">Check your intuition</h2>
+        </div>
+        <div class="review-list">
+          <details>
+            <summary>A checkout finishes, but a shared map still holds its payload. Can GC clear it?</summary>
+            <p>The map keeps the payload reachable. Removing or evicting the entry makes it eligible once the last path from a root is gone.</p>
+          </details>
+          <details>
+            <summary>Heap usage climbs before each young collection and falls to roughly the same level. What might explain it?</summary>
+            <p>A burst of short-lived allocations can create that sawtooth pattern. To investigate long-lived retention, also inspect old-generation usage after collections that reclaim it.</p>
+          </details>
+          <details>
+            <summary>A nightly worker needs to finish more jobs per hour and can tolerate pauses. Which collector would you test?</summary>
+            <p>Parallel GC is a reasonable candidate on a multi-CPU host. Compare completed jobs per hour against the current collector at the same heap size, CPU limit, and input load.</p>
+          </details>
+        </div>
+      </section>
+
+      <section class="chapter references" aria-labelledby="references-title">
+        <h2 id="references-title">References</h2>
+        <ul>
+          <li><a href="https://docs.oracle.com/en/java/javase/25/gctuning/garbage-collector-implementation.html">Oracle · Heap generations and GC performance</a></li>
+          <li><a href="https://docs.oracle.com/en/java/javase/25/gctuning/available-collectors.html">Oracle · Available collectors</a> and <a href="https://docs.oracle.com/en/java/javase/25/gctuning/ergonomics.html">HotSpot defaults</a></li>
+          <li><a href="https://docs.oracle.com/en/java/javase/25/docs/specs/man/java.html#enable-logging-with-the-jvm-unified-logging-framework">Oracle · Unified JVM logging</a></li>
+          <li>OpenJDK JEPs for <a href="https://openjdk.org/jeps/490">ZGC</a>, <a href="https://openjdk.org/jeps/521">Shenandoah</a>, <a href="https://openjdk.org/jeps/318">Epsilon</a>, and <a href="https://openjdk.org/jeps/363">CMS removal</a></li>
+        </ul>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
