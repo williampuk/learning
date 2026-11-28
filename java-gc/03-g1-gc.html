@@ -1,0 +1,1303 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#131a18">
+  <meta name="description" content="Learn how HotSpot G1 handles Spring Boot traffic, mixed collections, and large JSON exports. Try the region lab and read real JDK 25 GC logs.">
+  <title>G1 Garbage Collection</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #131a18;
+      --panel: #1b2521;
+      --inset: #101714;
+      --line: #3a4a42;
+      --ink: #f2f2e7;
+      --muted: #b9c8be;
+      --mint: #b7ebc4;
+      --amber: #f3c085;
+      --peach: #ffab99;
+      --serif: Georgia, "Times New Roman", serif;
+      --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font: 100%/1.65 system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; background: var(--bg); color: var(--ink); }
+    h1, h2, h3, p, figure, pre, dl, dd, ol, ul { margin: 0; }
+    h1, h2 { font: 400 clamp(2.35rem, 5.2vw, 4.4rem)/1 var(--serif); letter-spacing: -.045em; text-wrap: balance; }
+    h3 { line-height: 1.25; }
+    p + p { margin-top: .8rem; }
+    a { color: var(--mint); text-underline-offset: .22em; }
+    a:hover { color: var(--ink); }
+    :focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+    code, .mono, .eyebrow { font-family: var(--mono); }
+    code { font-size: .91em; overflow-wrap: anywhere; }
+    pre { padding: .9rem 1rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--inset); color: var(--mint); font: .9rem/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .shell { width: min(73rem, calc(100% - 3rem)); margin-inline: auto; }
+    .skip { position: absolute; z-index: 2; inset: .5rem auto auto .75rem; padding: .6rem 1rem; background: var(--inset); }
+    .skip:not(:focus) { clip-path: inset(50%); }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .top { border-bottom: 1px solid var(--line); }
+    .top .shell, .top nav { display: flex; flex-wrap: wrap; align-items: center; gap: 0 1.1rem; }
+    .top .shell { justify-content: space-between; }
+    .top a { display: inline-flex; align-items: center; min-height: 2.9rem; text-decoration: none; font-size: .86rem; font-weight: 700; }
+    .top nav a { color: var(--muted); }
+    .top nav a:hover { color: var(--mint); }
+    .hero { border-bottom: 1px solid var(--line); background: radial-gradient(ellipse at 82% 6%, #283e30, transparent 64%); }
+    .hero .shell, .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .85fr); align-items: center; gap: clamp(1.35rem, 4vw, 4.2rem); }
+    .hero .shell { padding-block: clamp(2.6rem, 6vw, 5.35rem); }
+    .eyebrow { color: var(--amber); font-size: .77rem; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
+    h1 { margin: .5rem 0 .9rem; font-size: clamp(3.25rem, 7.5vw, 6.8rem); }
+    .lead { color: var(--ink); font-size: clamp(1.05rem, 2vw, 1.25rem); }
+    .muted, .intro, figcaption { color: var(--muted); }
+    .intro { max-width: 72ch; margin-top: .8rem; }
+    .prereq { color: var(--muted); font-size: .9rem; }
+    .graph, .floor { overflow: hidden; border: 1px solid var(--line); border-radius: .8rem; background: var(--inset); }
+    .graph svg, .floor svg { display: block; width: 100%; height: auto; }
+    figcaption { padding: .7rem .9rem; border-top: 1px solid var(--line); font-size: .84rem; }
+    .section { padding-block: clamp(2.8rem, 6vw, 5.25rem); border-bottom: 1px solid var(--line); }
+    .section h2 { margin-bottom: .8rem; }
+    .terms { display: grid; gap: .58rem; }
+    .terms div { padding-top: .58rem; border-top: 1px solid var(--line); }
+    .terms dt { color: var(--amber); font-weight: 720; }
+    .terms dd { color: var(--muted); font-size: .94rem; }
+    .experiments { margin-top: 1.35rem; }
+    .experiment-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem; margin-top: .6rem; padding: 0; list-style: none; }
+    .experiment-list li { display: grid; grid-template-columns: 1.5rem 1fr; align-items: start; gap: .25rem .55rem; padding: .7rem; border: 1px solid var(--line); border-radius: .55rem; background: var(--inset); }
+    .experiment-list li[data-done="true"] { border-color: #759882; }
+    .mission-icon { grid-row: span 2; display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border: 1px solid #677b6e; border-radius: 50%; color: var(--muted); font: 700 .75rem var(--mono); }
+    [data-done="true"] .mission-icon { background: var(--mint); color: var(--inset); }
+    .experiment-list strong { font-size: .87rem; line-height: 1.4; }
+    .experiment-list p { color: var(--muted); font-size: .78rem; line-height: 1.4; }
+    .lab { margin-top: .85rem; border: 1px solid #506458; border-radius: .85rem; background: var(--panel); }
+    .thread-strip { position: sticky; top: 0; z-index: 1; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .15rem .75rem; align-items: center; min-height: 4.7rem; padding: .55rem 1rem; border-bottom: 1px solid #52735d; border-radius: .8rem .8rem 0 0; background: #192e23; }
+    .thread-light { grid-row: span 2; width: .7rem; height: .7rem; border-radius: 50%; background: var(--mint); animation: serving 1.5s ease-out 3; }
+    .thread-label { color: var(--muted); font-size: .75rem; line-height: 1.25; }
+    .thread-message { color: var(--mint); font: 700 clamp(.79rem, 1.75vw, 1rem)/1.35 var(--mono); }
+    .thread-strip[data-state="pause"] { background: #392b21; border-color: #93704a; }
+    .thread-strip[data-state="full"] { background: #422924; border-color: #a1685a; }
+    .thread-strip[data-state="pause"] :is(.thread-message, .thread-light) { color: var(--amber); }
+    .thread-strip[data-state="full"] :is(.thread-message, .thread-light) { color: var(--peach); }
+    .thread-strip:is([data-state="pause"], [data-state="full"]) .thread-light { background: currentColor; border-radius: 2px; animation: none; }
+    .lab :is(button, input, select) { scroll-margin-top: 5.5rem; }
+    @keyframes serving { 0%, 100% { box-shadow: 0 0 0 0 #b7ebc433; } 55% { box-shadow: 0 0 0 .35rem #b7ebc43d; } }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--line); background: #202d26; }
+    .metrics div { min-width: 0; padding: .72rem clamp(.55rem, 1.6vw, 1.15rem); }
+    .metrics div + div { border-left: 1px solid var(--line); }
+    .metrics dt { color: var(--muted); font-size: .78rem; }
+    .metrics dd { color: var(--mint); font: 700 clamp(.95rem, 2.3vw, 1.4rem)/1.45 var(--mono); overflow-wrap: anywhere; }
+    .lab-body { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(17rem, 1fr); }
+    .heap-panel { min-width: 0; padding: clamp(.65rem, 2.1vw, 1.2rem); border-right: 1px solid var(--line); background: var(--inset); }
+    .heap-head, .heap-inspect { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: .4rem .7rem; }
+    .heap-head p, .heap-inspect { color: var(--muted); font-size: .8rem; }
+    .heap-head strong { color: var(--ink); }
+    #region-grid { display: block; width: 100%; height: auto; margin-block: .7rem; }
+    .region { cursor: pointer; }
+    .region .tile { stroke-width: 1.5; }
+    .region.free .tile, .key-free { fill: #212c27; background: #212c27; stroke: #52665a; border-color: #52665a; }
+    .region.eden .tile, .key-eden { fill: #22604b; background: #22604b; stroke: #70bd96; border-color: #70bd96; }
+    .region.survivor .tile, .key-survivor { fill: #254a61; background: #254a61; stroke: #81bacf; border-color: #81bacf; }
+    .region.old .tile, .key-old { fill: #5d492d; background: #5d492d; stroke: #c0a065; border-color: #c0a065; }
+    .region.humongous .tile, .key-humongous { fill: #624563; background: #624563; stroke: #d7a9d9; border-color: #d7a9d9; }
+    .region.chosen .tile { stroke: #ffdc9a; stroke-width: 3.2; }
+    .region.reclaimed .tile { stroke: var(--mint); stroke-width: 2.6; stroke-dasharray: 4 3; }
+    .region.destination .tile { stroke: #e6f9ea; stroke-width: 2.6; stroke-dasharray: 1 3; }
+    .region.inspected .tile, .region:hover .tile { stroke: white; stroke-width: 3; }
+    .region text { fill: var(--ink); font-family: var(--mono); pointer-events: none; }
+    .region .region-id { font-size: 17px; }
+    .region .region-type { font-size: 20px; font-weight: 700; }
+    .region .region-note { fill: #ffe1a7; font-size: 16px; font-weight: 700; }
+    .slot, .heap-motion { pointer-events: none; }
+    .slot[data-state="live"], .live-copy { fill: #e3ffb7; }
+    .slot[data-state="garbage"] { fill: #201d1a; stroke: #e9c994; stroke-width: 1.4; }
+    .slot[data-state="empty"] { fill: none; stroke: #e5e9da; stroke-opacity: .33; stroke-width: 1; }
+    .copy-destination { fill: #d6efcf24; stroke: #e6f9ea; stroke-width: 2.8; stroke-dasharray: 2 4; }
+    .scan-tile { opacity: 0; fill: #bbe9cf40; stroke: #dcffeb; stroke-width: 2; pointer-events: none; }
+    .marking .scan-tile { animation: scan .42s ease-out var(--scan-delay) both; }
+    @keyframes scan { 0%, 100% { opacity: 0; } 35%, 65% { opacity: 1; } }
+    .legend { display: flex; flex-wrap: wrap; gap: .25rem .85rem; padding: 0; list-style: none; color: var(--muted); font-size: .76rem; }
+    .legend li { display: flex; align-items: center; gap: .32rem; }
+    .legend i { display: inline-grid; place-items: center; width: 1.08rem; height: 1rem; border: 1px solid; border-radius: .16rem; color: var(--ink); font: 700 .65rem var(--mono); font-style: normal; }
+    .legend .key-selected { border: 2px solid var(--amber); }
+    .legend .key-reclaimed { border: 1px dashed var(--mint); }
+    .legend .key-destination { border: 1px dotted var(--ink); }
+    .legend .key-live, .legend .key-garbage, .legend .key-empty { width: .67rem; height: .67rem; margin-inline: .18rem; border-radius: 50%; }
+    .legend .key-live { background: #e3ffb7; border-color: #e3ffb7; }
+    .legend .key-garbage { background: #201d1a; border-color: #e9c994; }
+    .legend .key-empty { border-color: #7c8a80; }
+    .heap-inspect { display: grid; grid-template-columns: auto 1fr; align-items: center; margin-top: .8rem; padding-top: .75rem; border-top: 1px solid var(--line); min-height: 3.8rem; }
+    select, button { border: 1px solid #62786a; border-radius: .4rem; background: #26362d; color: var(--ink); font: 650 .86rem/1.35 system-ui, sans-serif; }
+    select { min-height: 2.6rem; margin-left: .25rem; padding-inline: .25rem; }
+    button { min-height: 2.7rem; padding: .5rem .72rem; cursor: pointer; }
+    button:hover, select:hover { border-color: var(--mint); background: #33493b; }
+    button[aria-disabled="true"] { opacity: .52; cursor: default; }
+    button.primary { color: #13261a; background: var(--mint); border-color: var(--mint); }
+    button.primary:hover { background: #d1f5d8; }
+    .lab-controls { min-width: 0; padding: clamp(.85rem, 2.4vw, 1.25rem); }
+    .budget { padding-bottom: .8rem; border-bottom: 1px solid var(--line); }
+    .budget label { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .25rem .5rem; color: var(--ink); font-size: .85rem; }
+    .budget output { color: var(--amber); font: 700 .9rem var(--mono); }
+    .budget input { display: block; width: 100%; min-height: 1.75rem; margin: .35rem 0 0; accent-color: var(--amber); }
+    .ticks { display: flex; justify-content: space-between; color: var(--muted); font: .76rem var(--mono); }
+    .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .42rem; margin-block: .85rem .55rem; }
+    .actions button { text-align: left; }
+    #huge-export, #finish-exports, #mark-gc { grid-column: 1 / -1; }
+    .transport { display: flex; flex-wrap: wrap; gap: .35rem; }
+    .transport button { flex: 1; white-space: nowrap; }
+    .heap-panel .transport { margin-bottom: .75rem; }
+    #grid-anchor { scroll-margin-top: 5.25rem; }
+    .playback-jump { display: none; }
+    .event { margin-top: .85rem; padding: .65rem .75rem; border-left: 3px solid var(--mint); background: var(--inset); }
+    .event[data-kind="pause"] { border-color: var(--amber); }
+    .event[data-kind="full"] { border-color: var(--peach); }
+    .event h3 { color: var(--mint); font: 700 .83rem/1.4 var(--mono); }
+    .event[data-kind="pause"] h3 { color: var(--amber); }
+    .event[data-kind="full"] h3 { color: var(--peach); }
+    .event p, .plan { font-size: .83rem; color: var(--muted); }
+    .event p { margin-top: .32rem; }
+    .plan { padding-top: .75rem; }
+    .plan strong { color: var(--ink); }
+    .plan p { margin-top: .3rem; }
+    .pause-history { padding: .75rem clamp(.65rem, 2.1vw, 1.25rem) .9rem; border-top: 1px solid var(--line); }
+    .pause-history h3 { font-size: .93rem; }
+    .pause-history > p { color: var(--muted); font-size: .79rem; }
+    #pause-chart { display: block; width: min(100%, 38rem); height: auto; margin-top: .4rem; overflow: visible; }
+    #pause-chart text { fill: var(--muted); font: 11px var(--mono); }
+    #pause-chart .chart-value { fill: var(--ink); font-weight: 700; }
+    #pause-chart .chart-goal { stroke: var(--amber); stroke-dasharray: 5 4; }
+    #pause-chart .chart-axis { stroke: #708077; }
+    .pause-young { fill: #83c6d9; color: #a2d9e7; }
+    .pause-mixed { fill: #dfb577; color: #f3c085; }
+    .pause-full { fill: #f99080; color: #ffab99; }
+    .pause-history .legend { margin-top: .3rem; }
+    details { border: 1px solid var(--line); border-radius: .6rem; padding: .75rem .9rem; background: var(--panel); }
+    summary { cursor: pointer; color: var(--mint); font-weight: 700; }
+    details p, details ol, details pre { margin-top: .6rem; }
+    details ol { padding-left: 1.25rem; }
+    details li + li { margin-top: .4rem; }
+    .worked, .notes, .command { margin-top: 1rem; }
+    .command code { color: var(--amber); }
+    .log-board { display: grid; gap: .65rem; margin-top: 1rem; }
+    .log-board details { padding: .6rem .8rem; }
+    .log-board summary { color: var(--muted); font: .87rem/1.65 var(--mono); overflow-wrap: anywhere; }
+    .log-board summary:hover, .log-board summary:focus-visible, .log-board details[open] summary { color: var(--mint); }
+    .log-board summary code { color: inherit; }
+    .log-board .term { color: var(--amber); font-weight: 700; }
+    .log-board details p { padding-inline: .7rem; font-size: .89rem; color: var(--muted); }
+    .log-board details[open] p { padding-top: .5rem; border-top: 1px solid var(--line); }
+    .tokens { display: flex; flex-wrap: wrap; gap: .25rem .4rem; margin-top: .6rem; padding-inline: .7rem; }
+    .tokens button { font: 650 .79rem/1.35 var(--mono); }
+    .tokens button[aria-pressed="true"] { border-color: var(--amber); color: var(--amber); }
+    .token-help { display: block; margin: .5rem .7rem .25rem; font-size: .84rem; color: var(--mint); }
+    .checklist { padding: 0; list-style: none; counter-reset: check; margin-top: 1.15rem; }
+    .checklist li { position: relative; padding: .8rem 0 .8rem 2.1rem; border-top: 1px solid var(--line); counter-increment: check; color: var(--muted); }
+    .checklist li::before { content: counter(check, decimal-leading-zero); position: absolute; left: 0; top: 1.05rem; color: var(--amber); font: 700 .76rem var(--mono); }
+    .checklist strong { color: var(--ink); }
+    .code-compare { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: .7rem; margin-top: 1rem; }
+    .code-card { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: .65rem; background: var(--panel); }
+    .code-card h3, .code-card p { padding: .65rem .85rem; }
+    .code-card h3 { color: var(--peach); font-size: .97rem; }
+    .code-card:last-child h3 { color: var(--mint); }
+    .code-card p { color: var(--muted); font-size: .86rem; }
+    .code-card pre { border-inline: 0; border-radius: 0; font-size: .84rem; }
+    .code-memory { margin-top: .7rem; }
+    .quiz { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .7rem; margin-top: 1.1rem; }
+    .question { min-width: 0; padding: .9rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--panel); }
+    .question h3 { min-height: 3.1em; margin-bottom: .7rem; font-size: 1rem; }
+    .quiz-options { display: grid; gap: .35rem; }
+    .quiz-options button { text-align: left; overflow-wrap: anywhere; }
+    .quiz-options button[aria-pressed="true"] { border-color: var(--amber); box-shadow: inset 3px 0 var(--amber); }
+    .feedback { margin-top: .7rem; color: var(--mint); font-size: .86rem; }
+    .feedback:empty { margin: 0; }
+    .feedback[data-correct="false"] { color: var(--peach); }
+    .answer { margin-top: .65rem; padding: .5rem .65rem; font-size: .84rem; }
+    .sources { padding-block: 1.5rem 2.5rem; color: var(--muted); font-size: .87rem; }
+    .sources h2 { margin-bottom: .45rem; font: 700 1rem system-ui, sans-serif; letter-spacing: 0; }
+    .sources ul { padding-left: 1.2rem; margin-bottom: 1rem; }
+    @media (max-width: 850px) {
+      .hero .shell, .split { grid-template-columns: 1fr; align-items: start; }
+      .graph, .floor { max-width: 38rem; }
+      .quiz { grid-template-columns: 1fr; }
+      .question h3 { min-height: 0; }
+      .experiment-list { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 680px) {
+      .shell { width: calc(100% - 1.5rem); }
+      .lab-body { grid-template-columns: minmax(0, 1fr); }
+      .heap-panel { border-right: 0; border-bottom: 1px solid var(--line); }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metrics div:nth-child(odd) { border-left: 0; }
+      .metrics div:nth-child(n+3) { border-top: 1px solid var(--line); }
+      .code-compare { grid-template-columns: 1fr; }
+      .playback-jump { display: inline-block; margin-top: .55rem; font-size: .84rem; }
+    }
+    @media (max-width: 360px) {
+      .actions { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .thread-light, .marking .scan-tile { animation: none; }
+      .marking .scan-tile { opacity: .65; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to the lesson</a>
+  <header class="top">
+    <div class="shell">
+      <a href="#main">G1 Garbage Collection</a>
+      <nav aria-label="Lesson sections">
+        <a href="#restaurant">Analogy</a>
+        <a href="#lab">Region lab</a>
+        <a href="#logs">GC logs</a>
+        <a href="#tuning">Tuning</a>
+        <a href="#quiz">Quiz</a>
+      </nav>
+    </div>
+  </header>
+  <main id="main" tabindex="-1">
+    <div class="hero">
+      <div class="shell">
+        <div>
+          <p class="eyebrow">Java GC · HotSpot JDK 25 LTS</p>
+          <h1>G1 Garbage Collection</h1>
+          <p class="lead">Product lookups are usually fast. Then a few customers export the catalog, and even simple requests start running late. What changed in your Spring Boot e-commerce API with an 8&nbsp;GiB heap?</p>
+          <p><strong>You are almost certainly already running G1 in production.</strong> It has been HotSpot’s server-class default since Java 9, including JDK 21 and 25. G1 took over from Parallel GC to give typical server workloads shorter, more predictable collection pauses while maintaining good throughput. Small JVMs and explicit collector flags can change that selection.</p>
+          <p class="prereq">The <strong>heap</strong> holds Java objects. An object is <strong>unreachable</strong> when running code can no longer reach it through a reference, so the JVM can reclaim its space. Try the lab to see how that affects requests.</p>
+        </div>
+        <figure class="graph">
+          <svg viewBox="0 0 470 250" role="img" aria-labelledby="traffic-title traffic-desc">
+            <title id="traffic-title">Product lookups slow during an export burst</title>
+            <desc id="traffic-desc">Illustrative chart. Product lookup latency is normally low, rises during overlapping export requests, then returns to baseline.</desc>
+            <rect x="0" y="0" width="470" height="250" fill="#111a16"/>
+            <rect x="250" y="54" width="94" height="145" fill="#352b1d"/>
+            <path d="M26 61H442 M26 107H442 M26 153H442 M26 199H442" stroke="#33473c"/>
+            <path d="M250 54V199 M344 54V199" stroke="#96744f" stroke-dasharray="4 5"/>
+            <path d="M27 175L46 171L64 177L83 173L103 176L123 169L144 173L164 171L181 177L202 173L219 174L236 169L250 158L263 133L276 143L293 79L307 109L322 96L335 151L351 169L366 176L384 172L405 176L421 170L443 173" fill="none" stroke="#b7ebc4" stroke-width="3.3" stroke-linejoin="round"/>
+            <circle cx="293" cy="79" r="5" fill="#b7ebc4"/>
+            <g font-family="monospace" font-size="13">
+              <text x="25" y="34" fill="#c9d7cb">GET /products · tail latency</text>
+              <text x="297" y="225" fill="#f3c085" text-anchor="middle">Exports overlap</text>
+              <text x="442" y="225" fill="#c9d7cb" text-anchor="end">Time →</text>
+            </g>
+          </svg>
+          <figcaption>Illustrative request timing. Compare GC pauses with request timestamps to see whether GC contributed to the slowdown.</figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <section class="shell section" id="restaurant" aria-labelledby="restaurant-title">
+      <h2 id="restaurant-title">The Smart Restaurant Floor Manager</h2>
+      <p class="intro">A busy manager divides the floor into 32 equal square zones. When there’s a short break in service, say 200&nbsp;ms in our toy restaurant, staff start with zones piled high with empty plates. They move any meals still being eaten to clear tables and reopen the zones they’ve emptied. Picking a zone with one meal and seven empty plates means moving one meal to free an entire zone. That’s the idea behind the name Garbage-First (G1).</p>
+      <div class="split notes">
+        <figure class="floor">
+          <svg viewBox="0 0 456 242" role="img" aria-labelledby="floor-title floor-desc">
+            <title id="floor-title">32 square restaurant zones</title>
+            <desc id="floor-desc">Example floor of eight columns and four rows. The highlighted zone is mostly empty plates with one meal still being eaten. Staff move that meal to an available zone and recover the whole source zone.</desc>
+            <defs>
+              <pattern id="restaurant-square" width="52" height="52" patternUnits="userSpaceOnUse" x="20" y="17">
+                <rect x="2" y="2" width="46" height="46" rx="6" fill="#25362d" stroke="#506458"/>
+              </pattern>
+              <marker id="floor-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                <path d="M0 0L6 3L0 6Z" fill="#b7ebc4"/>
+              </marker>
+            </defs>
+            <rect width="456" height="242" fill="#111a16"/>
+            <rect x="20" y="17" width="416" height="208" fill="url(#restaurant-square)"/>
+            <rect x="126" y="71" width="46" height="46" rx="6" fill="#5d492d" stroke="#f3c085" stroke-width="2"/>
+            <rect x="282" y="123" width="46" height="46" rx="6" fill="#264936" stroke="#b7ebc4" stroke-width="2" stroke-dasharray="3 3"/>
+            <g fill="none" stroke="#f3c085" stroke-width="1.3">
+              <circle cx="136" cy="81" r="3"/><circle cx="148" cy="81" r="3"/><circle cx="160" cy="81" r="3"/>
+              <circle cx="136" cy="93" r="3"/><circle cx="148" cy="93" r="3"/><circle cx="136" cy="105" r="3"/><circle cx="148" cy="105" r="3"/>
+            </g>
+            <circle cx="160" cy="99" r="4.5" fill="#b7ebc4"/>
+            <path d="M166 99C224 92 238 151 289 146" fill="none" stroke="#b7ebc4" stroke-width="2.5" marker-end="url(#floor-arrow)"/>
+            <circle cx="305" cy="146" r="4.5" fill="#b7ebc4"/>
+          </svg>
+          <figcaption>Hollow circles are empty plates. The green meal moves to a new zone so the entire source zone can reopen.</figcaption>
+        </figure>
+        <dl class="terms">
+          <div><dt>Floor zones → heap regions</dt><dd>A region is an equally sized piece of the heap. Free regions can take on a new role as the application allocates.</dd></div>
+          <div><dt>Empty plates → unreachable objects</dt><dd>Marking traces which objects are still reachable. Much of it runs concurrently, while Tomcat can still serve requests.</dd></div>
+          <div><dt>Move the meals → evacuate live objects</dt><dd>During evacuation, Java threads pause while GC workers copy live objects out and release the selected regions. A normal young pause covers Eden and Survivor. A mixed pause also takes selected Old regions.</dd></div>
+          <div><dt>Short break → pause-time goal</dt><dd>G1 estimates how much work it can do in the pause, then gives preference to Old regions that offer more space back for the effort. Copying live objects and scanning incoming references both take time.</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="shell section" id="lab" aria-labelledby="lab-title">
+      <h2 id="lab-title">Choose what fits in the pause</h2>
+      <p class="intro">Most new objects start in <strong>Eden</strong>. When the JVM finds they’re still in use, it may move them to <strong>Survivor</strong> and eventually to <strong>Old</strong>. Look for Old tiles with the most hollow dots. They have more garbage to collect and fewer live objects to copy.</p>
+      <div class="experiments" id="experiments" hidden>
+        <h3>Try These 3 Experiments</h3>
+        <ol class="experiment-list">
+          <li id="mission-mixed"><span class="mission-icon" aria-hidden="true">1</span><strong>Pick four Old regions</strong><p>At 200 ms, select Run Mixed GC. Look for ranks #1–#4, then Step or Play.</p></li>
+          <li id="mission-soft"><span class="mission-icon" aria-hidden="true">2</span><strong>Go over 50 ms</strong><p>Reset the heap, lower the goal to 50 ms, then run and step through a mixed pause to see 66 ms.</p></li>
+          <li id="mission-full"><span class="mission-icon" aria-hidden="true">3</span><strong>Make room for an export</strong><p>Simulate Traffic Spike, allocate the 8 MB export, then Step or Play through Full GC and retry.</p></li>
+        </ol>
+        <p class="visually-hidden" id="mission-status" role="status"></p>
+      </div>
+      <div class="lab" id="interactive-lab" hidden>
+        <div class="thread-strip" id="thread-strip" data-state="serving" role="status" aria-atomic="true">
+          <span class="thread-light" aria-hidden="true"></span>
+          <span class="thread-label">Spring Boot Request Threads</span>
+          <strong class="thread-message" id="thread-message">Serving GET /products</strong>
+        </div>
+        <dl class="metrics">
+          <div><dt>Heap used · modeled</dt><dd id="heap-used"></dd></div>
+          <div><dt>Free regions</dt><dd id="free-count"></dd></div>
+          <div><dt>Objects recycled</dt><dd id="recycled"></dd></div>
+          <div><dt>Last stop-the-world pause</dt><dd id="pause-readout"></dd></div>
+        </dl>
+        <div class="lab-body">
+          <div class="heap-panel">
+            <div class="heap-head" id="grid-anchor" tabindex="-1"><p><strong>Region map</strong></p><p>8 × 6 regions · 4 MiB each</p></div>
+            <svg id="region-grid" viewBox="0 0 636 476" role="img" aria-labelledby="map-title map-desc">
+              <title id="map-title">G1 heap region map</title>
+              <desc id="map-desc">Each tile shows a region number, a role, and eight dots. Bright dots are live objects, hollow dots are unreachable, and faint outlines are spare slots. Numbered Old candidates are ranked by garbage in this model. Use Inspect to read any tile.</desc>
+            </svg>
+            <div class="transport" role="group" aria-label="Collection playback">
+              <button type="button" id="play" aria-disabled="true">Play</button>
+              <button type="button" id="step" aria-disabled="true">Step</button>
+              <button type="button" id="reset">Reset heap</button>
+            </div>
+            <ul class="legend" aria-label="Region map legend">
+              <li><i class="key-eden" aria-hidden="true">E</i> Eden</li>
+              <li><i class="key-survivor" aria-hidden="true">S</i> Survivor</li>
+              <li><i class="key-old" aria-hidden="true">O</i> Old</li>
+              <li><i class="key-free" aria-hidden="true">·</i> Free</li>
+              <li><i class="key-humongous" aria-hidden="true">H</i> Humongous</li>
+              <li><i class="key-selected" aria-hidden="true"></i> Selected</li>
+              <li><i class="key-reclaimed" aria-hidden="true"></i> Reclaimed</li>
+              <li><i class="key-destination" aria-hidden="true"></i> Copy destination</li>
+              <li><i class="key-live" aria-hidden="true"></i> Live</li>
+              <li><i class="key-garbage" aria-hidden="true"></i> Unreachable</li>
+              <li><i class="key-empty" aria-hidden="true"></i> Empty slot</li>
+            </ul>
+            <div class="heap-inspect">
+              <label for="region-picker">Inspect <select id="region-picker"></select></label>
+              <p id="inspect-region" aria-live="polite"></p>
+            </div>
+          </div>
+          <div class="lab-controls">
+            <div class="budget">
+              <label for="pause-budget"><code>-XX:MaxGCPauseMillis</code><output id="pause-goal" for="pause-budget">200 ms</output></label>
+              <input id="pause-budget" type="range" min="0" max="2" step="1" value="1" aria-valuetext="200 milliseconds" aria-describedby="budget-ticks">
+              <div class="ticks" id="budget-ticks"><span>50 ms</span><span>200 ms</span><span>500 ms</span></div>
+            </div>
+            <div class="actions">
+              <button type="button" id="rest-traffic">Normal REST Traffic</button>
+              <button type="button" id="traffic-spike">Simulate Traffic Spike</button>
+              <button type="button" id="huge-export">Allocate Huge 8 MB JSON Array (Humongous Object)</button>
+              <button type="button" id="finish-exports">Finish In-Flight Exports</button>
+              <button type="button" id="mark-gc">Run Concurrent Mark</button>
+              <button type="button" id="young-gc">Run Young GC</button>
+              <button type="button" id="mixed-gc" class="primary">Run Mixed GC</button>
+            </div>
+            <div class="event" id="event" role="status" aria-atomic="true">
+              <h3 id="event-title"></h3>
+              <p id="event-text"></p>
+            </div>
+            <div class="plan" id="plan"></div>
+            <a class="playback-jump" id="playback-jump" href="#grid-anchor" hidden>Go to the map and playback controls ↑</a>
+          </div>
+        </div>
+        <figure class="pause-history">
+          <h3>Pause history</h3>
+          <p>Last 10 modeled pauses across heap resets. The dashed line follows the current pause goal.</p>
+          <svg id="pause-chart" viewBox="0 0 424 130" role="img" aria-labelledby="pause-chart-title pause-chart-desc">
+            <title id="pause-chart-title">GC pause history in milliseconds</title>
+            <desc id="pause-chart-desc"></desc>
+            <g id="pause-chart-plot" aria-hidden="true"></g>
+          </svg>
+          <ul class="legend" aria-label="Pause chart legend">
+            <li><i class="pause-young" aria-hidden="true">Y</i> Young</li>
+            <li><i class="pause-mixed" aria-hidden="true">M</i> Mixed</li>
+            <li><i class="pause-full" aria-hidden="true">F</i> Full GC</li>
+          </ul>
+        </figure>
+      </div>
+      <noscript><p class="notes">Open the worked example to follow the same heap with JavaScript turned off.</p></noscript>
+      <details class="worked">
+        <summary>Worked example and Full GC walkthrough</summary>
+        <ol>
+          <li><strong>Make a mixed collection plan.</strong> Young work costs 36&nbsp;ms in the starting heap. The marked Old candidates, from most to least garbage, cost 30, 36, 44, 52, 60, and 70&nbsp;ms. At 200&nbsp;ms, G1’s toy planner picks R03, R09, R14, and R22 for 198&nbsp;ms of predicted work. All eight young regions go too. At 50&nbsp;ms, the first Old region is still required for progress, so the plan takes 66&nbsp;ms. At 500&nbsp;ms all six fit for 328&nbsp;ms.</li>
+          <li><strong>Evacuate those regions.</strong> At 200&nbsp;ms, six live Eden objects move to one Survivor region. Four live Survivor objects promote to Old and join ten live objects copied from the selected Old regions. Together they use two new Old regions. Twelve source regions become free, three destination regions are used, and 60 unreachable toy objects are recycled.</li>
+          <li><strong>Try a fragmented heap.</strong> <em>Simulate Traffic Spike</em> loads a scenario with 24 free regions, all isolated by Old regions. Click the 8&nbsp;MB export allocation. Its 8&nbsp;MiB <code>byte[]</code> payload plus header needs three consecutive 4&nbsp;MiB regions. Here ordinary collection has made no such run available. Step through the Full GC: the application stops, Old objects compact into 15 regions in the toy model, and the allocation succeeds on retry.</li>
+        </ol>
+        <p class="muted">The grid shows 48 regions, whereas the restaurant uses 32. The 4&nbsp;MiB region size matches a JDK 25 run with an 8&nbsp;GiB maximum heap. The lab’s 192&nbsp;MiB map, eight toy object slots per ordinary region, cost model, and fixed heap capacity are for teaching. Heap used counts all non-free region capacity, including unused space in the last region of a humongous allocation. The dots on Humongous tiles show portions of one reserved span. The lab depicts the concurrent part of marking. HotSpot also has stop-the-world phases such as Remark. Real G1 scores Old candidates by reclaimable space and collection cost, adapts the young generation, and can choose additional Old regions during the pause. It can try other collections or expand the heap before Full GC. Finishing exports drops the lab’s last references to its primitive arrays. The next young or mixed pause models G1’s eager reclamation of eligible arrays; in HotSpot that depends on the references G1 observes.</p>
+      </details>
+    </section>
+
+    <section class="shell section" id="logs" aria-labelledby="logs-title">
+      <h2 id="logs-title">Read a JDK 25 G1 log</h2>
+      <p class="intro">Run a Spring Boot jar with unified GC logging. <code>MaxGCPauseMillis</code> is a soft goal. A pause can exceed 200&nbsp;ms, and the flag does not set an HTTP request deadline.</p>
+      <pre class="command"><code>java -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -Xlog:gc* -jar api.jar</code></pre>
+      <p class="notes muted">The lines below are from an OpenJDK Temurin 25.0.4 test run with a 128&nbsp;MiB heap. Open a line for its breakdown, then hover, focus, or select an individual field.</p>
+      <div class="log-board">
+        <details>
+          <summary><code>[0.003s][info][gc     ] <span class="term">Using G1</span></code></summary>
+          <p>The startup banner confirms which collector this JVM selected. The bracketed parts show JVM uptime, log level, and log tags.</p>
+        </details>
+        <details open>
+          <summary><code>[0.359s][info][gc          ] GC(0) Pause Young (Normal) (G1 Evacuation Pause) <span class="term">38M-&gt;12M(128M) 2.979ms</span></code></summary>
+          <p>GC event 0 ended at 0.359&nbsp;s of uptime. G1 evacuated young regions and paused Java threads for 2.979&nbsp;ms. Used heap fell from about 38 to 12&nbsp;MiB out of 128&nbsp;MiB currently committed.</p>
+          <div class="tokens" hidden>
+            <button type="button" data-note="Elapsed JVM uptime when the log entry was emitted. Use wall-clock decorators if you need to match request timestamps from another process.">[0.359s]</button>
+            <button type="button" data-note="An info-level entry with the gc tag. A gc,heap entry gives counts by region role for the same GC event.">[info][gc]</button>
+            <button type="button" data-note="Event ID 0. Use the ID to join gc,heap and gc,phases entries to this pause.">GC(0)</button>
+            <button type="button" data-note="Normal young pause. Java threads stop while GC workers copy live objects from Eden and Survivor. Some live objects may move into Old.">Pause Young (Normal)</button>
+            <button type="button" data-note="G1 is copying live objects out of the regions it selected.">G1 Evacuation Pause</button>
+            <button type="button" data-note="About 38 MiB used before, 12 MiB used after, and 128 MiB committed. The top-level figures are rounded.">38M→12M(128M)</button>
+            <button type="button" data-note="2.979 ms of elapsed pause time for this event.">2.979ms</button>
+          </div>
+        </details>
+        <details>
+          <summary><code>[0.453s][info][gc          ] GC(19) <span class="term">Pause Young (Mixed)</span> (G1 Evacuation Pause) 119M-&gt;50M(128M) 0.411ms</code></summary>
+          <p>“Mixed” means G1 also evacuated selected Old regions. A concurrent mark cycle finished at 0.448&nbsp;s. The mixed collection freed about 69&nbsp;MiB overall, with a net decrease of one Old region. That net count does not tell you how many Old regions G1 selected because copies and promotions can use new Old regions.</p>
+          <div class="tokens" hidden>
+            <button type="button" data-note="GC event 19 ended at about 0.453 s of uptime. Match the Old and Humongous region entries using this ID.">[0.453s] GC(19)</button>
+            <button type="button" data-note="HotSpot logs the event as Pause Young (Mixed) because young regions are collected along with selected Old regions.">Pause Young (Mixed)</button>
+            <button type="button" data-note="This is still an evacuation pause. Concurrent marking identified live old objects before this event.">G1 Evacuation Pause</button>
+            <button type="button" data-note="About 119 MiB used before and 50 MiB after. This pause lasted 0.411 ms in the small test run.">119M→50M(128M) 0.411ms</button>
+          </div>
+        </details>
+        <details>
+          <summary><code>[0.453s][info][gc,heap     ] GC(19) <span class="term">Old regions: 33-&gt;32</span><br>[0.453s][info][gc,heap     ] GC(19) <span class="term">Humongous regions: 18-&gt;18</span></code></summary>
+          <p>These are region counts for the same event. Old dropped from 33 to 32. The separate Humongous count stayed at 18. The test heap used 1&nbsp;MiB regions, so two retained 8&nbsp;MiB payload arrays plus headers occupied nine regions each.</p>
+          <div class="tokens" hidden>
+            <button type="button" data-note="The gc,heap tag describes heap occupancy by region role. Read it alongside the pause with the same event ID.">[gc,heap] GC(19)</button>
+            <button type="button" data-note="Ordinary Old region count declined by one overall. Promotions and evacuation destinations can offset some reclaimed source regions.">Old regions: 33→32</button>
+            <button type="button" data-note="Eighteen Humongous regions were present before and after. One array can occupy several regions.">Humongous regions: 18→18</button>
+          </div>
+        </details>
+      </div>
+      <details class="worked">
+        <summary>Reproduce the log with JDK 25</summary>
+        <p>Save this as <code>G1LogDemo.java</code>. Short-lived 32&nbsp;KiB buffers represent normal lookups, the cache keeps some buffers alive, and two exports overlap. Times, counts, and the exact sequence vary by run.</p>
+        <pre><code>import java.util.ArrayDeque;
+
+class G1LogDemo {
+    static volatile byte[] request;
+    static final byte[][] cache = new byte[800][];
+    static final ArrayDeque&lt;byte[]&gt; inFlight = new ArrayDeque&lt;&gt;();
+
+    public static void main(String[] args) {
+        for (int phase = 0; phase &lt; 5; phase++) {
+            for (int i = 0; i &lt; 22_000; i++) {
+                request = new byte[32 * 1024];
+                if (i &lt; cache.length &amp;&amp; (phase == 0 || i % 10 == 0)) {
+                    cache[i] = request;
+                }
+                if (i % 4_000 == 0) {
+                    inFlight.addLast(new byte[8 * 1024 * 1024]);
+                    if (inFlight.size() &gt; 2) inFlight.removeFirst();
+                }
+            }
+        }
+    }
+}</code></pre>
+        <pre><code>java -Xms128m -Xmx128m -XX:ActiveProcessorCount=4 -XX:+UseG1GC -XX:MaxGCPauseMillis=200 '-Xlog:gc*:file=g1-demo.log' G1LogDemo.java</code></pre>
+      </details>
+    </section>
+
+    <section class="shell section" id="tuning" aria-labelledby="tuning-title">
+      <h2 id="tuning-title">What to tune on a web service</h2>
+      <ol class="checklist">
+        <li><strong>Confirm G1 and correlate the pauses.</strong> Look for <code>Using G1</code> and the startup <code>Heap Region Size</code>. Line up pause duration and frequency with p99 latency, the time below which 99% of requests finished. Check request queues and CPU throttling in the same window.</li>
+        <li><strong>Look for large allocations and retention.</strong> A single object over half a G1 region is humongous and goes straight into a contiguous run in the old generation. Check <code>Humongous regions</code> for sustained growth and use allocation profiling to find large <code>byte[]</code> or String backing arrays. Large buffers stay live while requests, queues, or caches hold references.</li>
+        <li><strong>Change the export path first.</strong> Write JSON in bounded batches to the response, page the database reads, and limit simultaneous exports. Check that downstream layers also avoid buffering the entire response. Assembling a large String before encoding can create another large buffer.</li>
+        <li><strong>Keep the flag set small.</strong> Start with G1’s adaptive defaults and size <code>-Xmx</code> with room for metaspace, thread stacks, direct buffers, and other memory outside the heap. Try a different pause target only after measuring. Fixing young size with <code>-Xmn</code> or <code>-XX:NewRatio</code> takes away one of G1’s main controls.</li>
+        <li><strong>Investigate Full GC before changing collectors.</strong> A request can fail to find a contiguous run or an evacuation can run short of space for live copies. Repeated <code>Pause Full (G1 Compaction Pause)</code> calls for checking allocation rate, live-set growth, and headroom. If healthy G1 still causes your service to miss its tail-latency objective, compare Generational ZGC (<code>-XX:+UseZGC</code>) on the same load. Test latency, CPU, throughput, and memory headroom together.</li>
+      </ol>
+      <div class="code-compare">
+        <div class="code-before">
+          <article class="code-card">
+            <h3>Before · Humongous allocation spike</h3>
+            <pre><code>// products holds the entire catalog as export rows.
+byte[] body =
+    objectMapper.writeValueAsBytes(products);
+return ResponseEntity.ok()
+    .contentType(MediaType.APPLICATION_JSON)
+    .body(body);</code></pre>
+            <p>All rows and their serialized bytes can be live together. Each overlapping export can add another large array.</p>
+          </article>
+          <figure class="graph code-memory">
+            <svg viewBox="0 0 452 186" role="img" aria-labelledby="export-memory-title export-memory-desc">
+              <title id="export-memory-title">Export data held live over time</title>
+              <desc id="export-memory-desc">Illustration. Buffered serialization holds a large body in memory until delivery. Paging and streaming use a much smaller working set with repeated peaks as each slice is read and released.</desc>
+              <path d="M28 47V149H427 M28 82H427 M28 116H427" fill="none" stroke="#3a4a42"/>
+              <path d="M30 148L82 114L130 67L181 53H358L372 148H427V149H30Z" fill="#ffab9921"/>
+              <path d="M30 148L82 114L130 67L181 53H358L372 148H427" fill="none" stroke="#ffab99" stroke-width="2.5"/>
+              <path d="M30 148L78 128L95 144L148 125L167 144L218 128L238 144L289 125L311 144L357 128L375 144L427 148" fill="none" stroke="#b7ebc4" stroke-width="2.5" stroke-dasharray="7 4"/>
+              <g font-family="monospace" font-size="13">
+                <text x="28" y="29" fill="#c9d7cb">Export data held live</text>
+                <text x="194" y="73" fill="#ffab99">Full response buffered</text>
+                <text x="192" y="115" fill="#b7ebc4">One slice at a time</text>
+                <text x="427" y="174" text-anchor="end" fill="#c9d7cb">Time →</text>
+              </g>
+            </svg>
+            <figcaption>Illustrative memory use for one export. The same JSON can reach the client in either case.</figcaption>
+          </figure>
+        </div>
+        <article class="code-card">
+          <h3>After · Streaming &amp; paged</h3>
+          <pre><code>// Spring MVC + Jackson 2
+@GetMapping("/products/export")
+ResponseEntity&lt;StreamingResponseBody&gt; exportProducts() {
+    ObjectWriter rows = objectMapper.writer()
+        .without(SerializationFeature.FLUSH_AFTER_WRITE_VALUE);
+    StreamingResponseBody body = out -&gt; {
+        Pageable page = PageRequest.of(0, 200, Sort.by("id"));
+        try (JsonGenerator json =
+                 objectMapper.getFactory().createGenerator(out)) {
+            json.disable(JsonGenerator.Feature.AUTO_CLOSE_TARGET);
+            json.writeStartArray();
+            while (true) {
+                Slice&lt;Product&gt; batch = repository.findAllBy(page);
+                for (Product product : batch) {
+                    rows.writeValue(json, new ExportProduct(
+                        product.getId(), product.getName()));
+                }
+                json.flush();
+                if (!batch.hasNext()) break;
+                page = batch.nextPageable();
+            }
+            json.writeEndArray();
+        }
+    };
+    return ResponseEntity.ok()
+        .contentType(MediaType.APPLICATION_JSON)
+        .body(body);
+}</code></pre>
+          <p>Jackson writes one JSON array directly to the response stream, flushing once per slice. Rows and temporary objects can become unreachable a slice at a time, often while still in Eden.</p>
+        </article>
+      </div>
+      <p class="notes muted">Declare <code>Slice&lt;Product&gt; findAllBy(Pageable page)</code> on your Spring Data repository. <code>ExportProduct</code> is the same ID-and-name record used on both paths. Read the scalar fields needed by that record and keep the persistence context scoped to each slice so it can release the entities. A <code>Slice</code> tells you whether another batch exists without requiring a total row count. Check that servlet and proxy layers send the response incrementally.</p>
+    </section>
+
+    <section class="shell section" id="quiz" aria-labelledby="quiz-title">
+      <h2 id="quiz-title">Check your intuition</h2>
+      <div class="quiz">
+        <article class="question" data-hint="Check the young cost and the first Old region cost in the lab’s collection plan.">
+          <h3>At 50 ms, why does the toy mixed pause plan 66 ms?</h3>
+          <div class="quiz-options" hidden>
+            <button type="button" data-correct="false">All Old regions must be copied.</button>
+            <button type="button" data-correct="true">Young work and the minimum Old set cost 66 ms.</button>
+            <button type="button" data-correct="false">The timer starts after the first 16 ms.</button>
+          </div>
+          <p class="feedback" role="status"></p>
+          <details class="answer"><summary>Show explanation</summary><p>Young work costs 36&nbsp;ms, and the first Old candidate adds 30&nbsp;ms for progress. The target can be exceeded.</p></details>
+        </article>
+        <article class="question" data-hint="Look at where the free tiles sit after Simulate Traffic Spike.">
+          <h3>Why can an 8 MiB payload fail to fit in 24 free regions?</h3>
+          <div class="quiz-options" hidden>
+            <button type="button" data-correct="false">Every region in the heap is too small for any part of the array.</button>
+            <button type="button" data-correct="false">It must first occupy an Eden region.</button>
+            <button type="button" data-correct="true">The array needs a run of three adjacent free regions.</button>
+          </div>
+          <p class="feedback" role="status"></p>
+          <details class="answer"><summary>Show explanation</summary><p>With 4&nbsp;MiB regions, an 8&nbsp;MiB payload plus its array header spans three regions. They must be adjacent in heap address order.</p></details>
+        </article>
+        <article class="question" data-hint="Find the step that changes what the export allocates in the first place.">
+          <h3>Exports drive up Humongous regions and p99. What should you try first?</h3>
+          <div class="quiz-options" hidden>
+            <button type="button" data-correct="true">Profile allocations, stream or page exports, and remeasure.</button>
+            <button type="button" data-correct="false">Pin the young generation with <code>-Xmn</code>.</button>
+            <button type="button" data-correct="false">Set a 10 ms target and expect a hard pause cap.</button>
+          </div>
+          <p class="feedback" role="status"></p>
+          <details class="answer"><summary>Show explanation</summary><p>Bound the large allocations and how many overlap, then compare GC logs and request latency under the same load.</p></details>
+        </article>
+      </div>
+    </section>
+  </main>
+  <footer class="shell sources">
+    <h2>References</h2>
+    <ul>
+      <li><a href="https://docs.oracle.com/en/java/javase/25/gctuning/garbage-first-g1-garbage-collector1.html">Oracle JDK 25 G1 collector guide</a></li>
+      <li><a href="https://docs.oracle.com/en/java/javase/25/gctuning/garbage-first-garbage-collector-tuning.html">Oracle JDK 25 G1 tuning guide</a></li>
+      <li><a href="https://docs.oracle.com/en/java/javase/25/gctuning/ergonomics.html">Oracle JDK 25 collector selection and tuning goals</a></li>
+      <li><a href="https://github.com/openjdk/jdk/blob/jdk-25-ga/src/hotspot/share/gc/g1/g1CollectedHeap.hpp">OpenJDK 25 HotSpot source for the exact humongous size cutoff</a></li>
+      <li><a href="https://docs.oracle.com/javase/9/whatsnew/toc.htm">Oracle JDK 9 release notes for the G1 default</a></li>
+      <li><a href="https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/web/servlet/mvc/method/annotation/StreamingResponseBody.html">Spring MVC StreamingResponseBody</a></li>
+      <li><a href="https://docs.spring.io/spring-data/commons/reference/repositories/query-methods-details.html#repositories.special-parameters">Spring Data paging and slices</a></li>
+    </ul>
+    <nav aria-label="Optional course navigation">
+      <a href="#main">Back to top</a> · Optional course links (full site) ·
+      <a href="./">Java GC foundations</a> · <a href="../">Interactive Learning directory</a>
+    </nav>
+  </footer>
+  <script>
+    (() => {
+      'use strict';
+
+      const get = id => document.getElementById(id);
+      const regionSize = 4;
+      const regionCount = 48;
+      const slots = 8;
+      const exportRegions = 3;
+      const recentPauseLimit = 10;
+      const pauseGoals = [50, 200, 500];
+      const oldCandidates = [
+        { number: 3, garbage: 7, cost: 30 },
+        { number: 9, garbage: 6, cost: 36 },
+        { number: 14, garbage: 5, cost: 44 },
+        { number: 22, garbage: 4, cost: 52 },
+        { number: 28, garbage: 3, cost: 60 },
+        { number: 36, garbage: 2, cost: 70 }
+      ];
+      const roles = {
+        free: ['Free', '·'], eden: ['Eden', 'E'], survivor: ['Survivor', 'S'],
+        old: ['Old', 'O'], humongous: ['Humongous', 'H']
+      };
+      const map = get('region-grid');
+      const motionLayer = svg('g', { class: 'heap-motion', 'aria-hidden': 'true' });
+      const picker = get('region-picker');
+      const slider = get('pause-budget');
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+      const buttons = {
+        traffic: get('rest-traffic'), export: get('huge-export'),
+        finish: get('finish-exports'), mark: get('mark-gc'), young: get('young-gc'),
+        mixed: get('mixed-gc'), spike: get('traffic-spike'),
+        play: get('play'), step: get('step')
+      };
+      const actionButtons = [buttons.traffic, buttons.export, buttons.finish, buttons.mark, buttons.young, buttons.mixed, buttons.spike];
+      const empty = () => ({ role: 'free', live: 0, garbage: 0 });
+      const region = (role, live, garbage = 0) => ({ role, live, garbage });
+      const name = index => 'R' + String(index + 1).padStart(2, '0');
+      const history = [];
+      const rankedCandidates = () => [...candidates.keys()].sort((first, second) => heap[second].garbage - heap[first].garbage);
+
+      let heap;
+      let candidates;
+      let recycled;
+      let stage;
+      let timer = null;
+      let phaseTimer = null;
+      let animations = [];
+      let event;
+      let inspected = null;
+      let reclaimed = [];
+      let destinations = [];
+      let fullCount = 0;
+      let resetByLearner = false;
+      let spikeLoaded = false;
+      let threadState = '';
+
+      function svg(tag, attributes = {}) {
+        const element = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value);
+        return element;
+      }
+
+      function tilePosition(index) {
+        return [2 + (index % 8) * 80, 2 + Math.floor(index / 8) * 80];
+      }
+
+      function slotPosition(slot) {
+        return [11 + (slot % 4) * 16, 48 + Math.floor(slot / 4) * 13];
+      }
+
+      const tiles = Array.from({ length: regionCount }, (_, index) => {
+        const group = svg('g', { transform: 'translate(' + tilePosition(index).join(' ') + ')' });
+        const rect = svg('rect', { width: 72, height: 72, rx: 6, class: 'tile' });
+        const scan = svg('rect', { x: 2, y: 2, width: 68, height: 68, rx: 5, class: 'scan-tile' });
+        scan.style.setProperty('--scan-delay', (index % 8) * 95 + Math.floor(index / 8) * 28 + 'ms');
+        const label = svg('text', { x: 6, y: 19, class: 'region-id' });
+        label.textContent = name(index);
+        const type = svg('text', { x: 65, y: 19, 'text-anchor': 'end', class: 'region-type' });
+        const note = svg('text', { x: 6, y: 36, class: 'region-note' });
+        const dots = Array.from({ length: slots }, (_, slot) => {
+          const [cx, cy] = slotPosition(slot);
+          return svg('circle', { cx, cy, r: 4.4, class: 'slot' });
+        });
+        const tooltip = svg('title');
+        group.append(tooltip, rect, scan, label, type, note, ...dots);
+        group.addEventListener('click', () => {
+          inspected = index;
+          picker.value = String(index);
+          renderMap();
+        });
+        map.append(group);
+        picker.add(new Option(name(index), index));
+        return { group, type, note, dots, tooltip };
+      });
+      map.append(motionLayer);
+
+      function setEvent(title, text, kind = '') {
+        event = { title, text, kind };
+      }
+
+      function cancelPlayback() {
+        clearInterval(timer);
+        timer = null;
+      }
+
+      function clearMotion() {
+        for (const animation of animations) animation.cancel();
+        animations = [];
+        motionLayer.replaceChildren();
+      }
+
+      function reset() {
+        cancelPlayback();
+        clearTimeout(phaseTimer);
+        phaseTimer = null;
+        clearMotion();
+        heap = Array.from({ length: regionCount }, empty);
+        candidates = new Map();
+        for (const number of [1, 5, 10, 13, 18, 23]) heap[number - 1] = region('eden', 1, 6);
+        for (const number of [7, 20]) heap[number - 1] = region('survivor', 2, 1);
+        for (const number of [2, 6, 11, 15, 17, 24, 30, 34, 39, 45]) heap[number - 1] = region('old', 7, 1);
+        for (const { number, garbage, cost } of oldCandidates) {
+          heap[number - 1] = region('old', slots - garbage, garbage);
+          candidates.set(number - 1, cost);
+        }
+        stage = null;
+        recycled = 0;
+        fullCount = 0;
+        spikeLoaded = false;
+        inspected = null;
+        picker.value = '2';
+        slider.value = '1';
+        clearHighlights();
+        setEvent('Ready · Old candidates already marked', 'Six Old tiles are ranked by their hollow dots. Try a mixed collection, or run Concurrent Mark to watch the scan while requests keep serving.');
+        render();
+      }
+
+      function clearHighlights() {
+        reclaimed = [];
+        destinations = [];
+      }
+
+      function indices(predicate) {
+        return heap.flatMap((area, index) => predicate(area) ? [index] : []);
+      }
+
+      function describeRegion(index) {
+        const area = heap[index];
+        const role = roles[area.role][0];
+        if (area.role === 'free') return name(index) + ' · Free · 4 MiB available.';
+        if (area.role === 'humongous') {
+          return name(index) + ' · Humongous · export ' + area.exportId + ', part ' + area.part + ' of ' + exportRegions +
+            (area.released ? ' · unreachable, waiting for GC.' : ' · still held by a request.');
+        }
+        const detail = candidates.has(index) ? ' Marked Old candidate, ' + candidates.get(index) + ' ms predicted copy and scan cost.' : '';
+        return name(index) + ' · ' + role + ' · ' + area.live + ' live, ' + area.garbage + ' unreachable of eight slots.' + detail;
+      }
+
+      function renderMap() {
+        const selected = stage?.sources || [];
+        const ranks = rankedCandidates();
+        for (const [index, tile] of tiles.entries()) {
+          const area = heap[index];
+          tile.group.setAttribute('class', [
+            'region', area.role, selected.includes(index) && 'chosen',
+            reclaimed.includes(index) && 'reclaimed', destinations.includes(index) && 'destination',
+            stage?.kind === 'mark' && area.role === 'old' && 'marking',
+            inspected === index && 'inspected'
+          ].filter(Boolean).join(' '));
+          tile.type.textContent = roles[area.role][1];
+          tile.note.textContent = '';
+          if (candidates.has(index)) tile.note.textContent = '#' + (ranks.indexOf(index) + 1);
+          if (area.role === 'humongous') tile.note.textContent = area.part + '/' + exportRegions;
+          if (reclaimed.includes(index)) tile.note.textContent = 'free';
+          if (destinations.includes(index)) tile.note.textContent = 'copy';
+          const occupied = area.role === 'humongous' ? (area.part < exportRegions ? slots : 1) : area.live + area.garbage;
+          const live = area.role === 'humongous' && !area.released ? occupied : area.live;
+          for (const [slot, dot] of tile.dots.entries()) {
+            dot.dataset.state = slot < live ? 'live' : slot < occupied ? 'garbage' : 'empty';
+          }
+          tile.tooltip.textContent = describeRegion(index);
+        }
+        const description = describeRegion(Number(picker.value));
+        if (get('inspect-region').textContent !== description) get('inspect-region').textContent = description;
+      }
+
+      function showPlan() {
+        const plan = get('plan');
+        plan.replaceChildren();
+        if (stage?.kind !== 'evacuate') return;
+
+        const summary = document.createElement('strong');
+        summary.textContent = 'Collection set · ' + stage.young.length + ' young + ' + stage.old.length + ' Old';
+        const detail = document.createElement('p');
+        const costs = stage.old.map(index => name(index) + ' (' + candidates.get(index) + ' ms)');
+        detail.textContent = 'Young work ' + stage.youngCost + ' ms' +
+          (costs.length ? ' + ' + costs.join(' + ') : '') + ' = ' + stage.cost + ' ms predicted.';
+        plan.append(summary, detail);
+        if (stage.cost > stage.goal) {
+          const warning = document.createElement('p');
+          warning.textContent = 'The minimum collection set already exceeds the soft ' + stage.goal + ' ms goal.';
+          plan.append(warning);
+        }
+      }
+
+      function drawPauseChart(goal) {
+        const plot = get('pause-chart-plot');
+        const scale = Math.ceil(Math.max(goal, ...history.map(pause => pause.ms)) * 1.13 / 50) * 50;
+        const baseline = 108;
+        const y = ms => baseline - ms / scale * 88;
+        const text = (value, x, line, attributes) => {
+          const label = svg('text', { x, y: line, ...attributes });
+          label.textContent = value;
+          return label;
+        };
+        plot.replaceChildren(
+          text(scale + ' ms', 44, 20, { 'text-anchor': 'end' }),
+          text(goal + ' ms', 44, y(goal) + 4, { 'text-anchor': 'end' }),
+          svg('line', { x1: 52, y1: baseline, x2: 423, y2: baseline, class: 'chart-axis' }),
+          svg('line', { x1: 52, y1: y(goal), x2: 423, y2: y(goal), class: 'chart-goal' })
+        );
+        const centered = { 'text-anchor': 'middle' };
+        if (!history.length) plot.append(text('No pauses yet. Run Young GC, then Step.', 237, 70, centered));
+        for (const [index, pause] of history.entries()) {
+          const x = 73 + index * 36;
+          const top = y(pause.ms);
+          const bar = svg('rect', { x: x - 11, y: top, width: 22, height: baseline - top, rx: 2, class: 'pause-' + pause.type.toLowerCase() });
+          const label = svg('title');
+          label.textContent = pause.type + ' GC · ' + pause.ms + ' ms';
+          bar.append(label);
+          plot.append(
+            bar,
+            text(pause.ms, x, top - 4, { ...centered, class: 'chart-value' }),
+            text(pause.type[0], x, 123, centered)
+          );
+        }
+        get('pause-chart-desc').textContent = 'Current pause goal ' + goal + ' milliseconds. ' + (history.length
+          ? 'Oldest to newest: ' + history.map(pause => pause.type + ' ' + pause.ms + ' milliseconds').join(', ') + '.'
+          : 'No pauses recorded.');
+      }
+
+      function recordPause(type, ms) {
+        history.push({ type, ms });
+        if (history.length > recentPauseLimit) history.shift();
+      }
+
+      function completeMission(name, detail) {
+        const mission = get('mission-' + name);
+        if (mission.dataset.done === 'true') return;
+        mission.dataset.done = 'true';
+        mission.querySelector('.mission-icon').textContent = '✓';
+        mission.querySelector('p').textContent = 'Complete · ' + detail;
+        get('mission-status').textContent = mission.querySelector('strong').textContent + ' complete. ' + detail;
+      }
+
+      function render() {
+        const free = indices(area => area.role === 'free').length;
+        const goal = pauseGoals[Number(slider.value)];
+        get('heap-used').textContent = (regionCount - free) * regionSize + ' / ' + regionCount * regionSize + ' MiB';
+        get('free-count').textContent = free + ' / ' + regionCount;
+        get('recycled').textContent = String(recycled);
+        const latest = history.at(-1);
+        get('pause-readout').textContent = latest ? latest.ms + ' ms' : '—';
+        get('pause-goal').textContent = goal + ' ms';
+        slider.setAttribute('aria-valuetext', goal + ' milliseconds');
+        for (const button of actionButtons) button.setAttribute('aria-disabled', String(Boolean(stage)));
+        const working = phaseTimer !== null;
+        const canPlay = Boolean(stage) && stage.kind !== 'mark';
+        buttons.play.textContent = timer === null ? 'Play' : 'Pause';
+        buttons.play.setAttribute('aria-disabled', String(!canPlay || (working && timer === null)));
+        buttons.step.setAttribute('aria-disabled', String(!canPlay || working || timer !== null));
+        const nextThreadState = stage?.kind === 'resume' || (working && stage?.kind === 'full')
+          ? 'full' : working && stage?.kind === 'evacuate' ? 'pause' : stage?.kind === 'mark' ? 'marking' : 'serving';
+        if (threadState !== nextThreadState) {
+          threadState = nextThreadState;
+          get('thread-strip').dataset.state = threadState;
+          // Re-entering an active state restarts the brief pulse without leaving an endless animation.
+          const light = get('thread-strip').querySelector('.thread-light');
+          light.replaceWith(light.cloneNode());
+        }
+        const message = threadState === 'full' || threadState === 'pause'
+          ? 'STOP-THE-WORLD PAUSE — Tomcat threads frozen'
+          : threadState === 'marking' ? 'Serving GET /products · GC marking in background' : 'Serving GET /products';
+        if (get('thread-message').textContent !== message) get('thread-message').textContent = message;
+        get('playback-jump').hidden = !canPlay;
+        get('event').dataset.kind = event.kind;
+        if (get('event-title').textContent !== event.title) get('event-title').textContent = event.title;
+        if (get('event-text').textContent !== event.text) get('event-text').textContent = event.text;
+        renderMap();
+        showPlan();
+        drawPauseChart(goal);
+      }
+
+      function planEvacuation(mixed) {
+        const young = indices(area => area.role === 'eden' || area.role === 'survivor');
+        const goal = pauseGoals[Number(slider.value)];
+        const youngCost = 20 + 2 * young.length;
+        let cost = youngCost;
+        const old = [];
+        if (mixed) {
+          for (const index of rankedCandidates()) {
+            const next = cost + candidates.get(index);
+            if (old.length && next > goal) break;
+            old.push(index);
+            cost = next;
+          }
+        }
+        stage = { kind: 'evacuate', sources: [...young, ...old], young, old, youngCost, cost, goal, mixed };
+      }
+
+      function beginEvacuation(mixed, reason) {
+        clearHighlights();
+        if (!mixed && !heap.some(area => area.role === 'eden' || area.role === 'survivor' || area.released)) {
+          setEvent('No collection set available', 'Add REST traffic for young regions, or run Concurrent Mark to find Old candidates.');
+          return;
+        }
+        planEvacuation(mixed);
+        const title = mixed ? 'Mixed collection set selected' : 'Young collection set selected';
+        setEvent(title, reason + ' Step or Play to stop Java threads and evacuate the outlined regions.');
+      }
+
+      function beginMark() {
+        clearHighlights();
+        candidates.clear();
+        stage = { kind: 'mark' };
+        setEvent('Concurrent mark running', 'GC workers trace reachable objects in Old regions while Spring Boot keeps serving requests.');
+        runPhase(1300, () => {
+          for (const index of indices(area => area.role === 'old' && area.garbage >= 2)) {
+            const { cost } = oldCandidates.find(candidate => candidate.garbage === heap[index].garbage);
+            candidates.set(index, cost);
+          }
+          stage = null;
+          setEvent('Old regions ranked', candidates.size + ' Old candidates are now ranked by garbage in the model. ' +
+            (candidates.size ? 'Run Mixed GC to pick a collection set.' : 'There are no eligible Old regions to add.'));
+        });
+      }
+
+      function slotsOf(source, kind) {
+        return source.reduce((sum, index) => sum + heap[index][kind], 0);
+      }
+
+      function liveObjects(sources) {
+        return sources.flatMap(index => Array.from({ length: heap[index].live }, (_, slot) => ({ index, slot })));
+      }
+
+      // One placement plan drives both the animation and the resulting heap.
+      function pack(role, objects, space) {
+        const placements = [];
+        for (let offset = 0; offset < objects.length; offset += slots) {
+          placements.push({ index: space.shift(), role, objects: objects.slice(offset, offset + slots) });
+        }
+        return placements;
+      }
+
+      function applyPlacements(placements) {
+        destinations = placements.map(({ index, role, objects }) => {
+          heap[index] = region(role, objects.length);
+          return index;
+        });
+      }
+
+      function runPhase(duration, finish) {
+        phaseTimer = setTimeout(() => {
+          phaseTimer = null;
+          clearMotion();
+          finish();
+          if (!stage) cancelPlayback();
+          render();
+        }, duration);
+        render();
+      }
+
+      function animateCopies(placements, discarded) {
+        for (const { index, objects } of placements) {
+          const [x, y] = tilePosition(index);
+          motionLayer.append(svg('rect', { x, y, width: 72, height: 72, rx: 6, class: 'copy-destination' }));
+          if (reducedMotion.matches) continue;
+          for (const [destSlot, source] of objects.entries()) {
+            if (source.index === index && source.slot === destSlot) continue;
+            const original = tiles[source.index].dots[source.slot];
+            animations.push(original.animate({ opacity: 0 }, { duration: 1, fill: 'forwards' }));
+            const [originX, originY] = tilePosition(source.index);
+            const [slotX, slotY] = slotPosition(source.slot);
+            const [destX, destY] = slotPosition(destSlot);
+            const dx = x + destX - originX - slotX;
+            const dy = y + destY - originY - slotY;
+            const dot = svg('circle', { cx: originX + slotX, cy: originY + slotY, r: 4.6, class: 'live-copy' });
+            motionLayer.append(dot);
+            animations.push(dot.animate([
+              { transform: 'translate(0, 0)' },
+              { transform: 'translate(' + dx + 'px, ' + dy + 'px)' }
+            ], { duration: 560, delay: destSlot * 18, easing: 'cubic-bezier(.34,.04,.27,1)', fill: 'forwards' }));
+          }
+        }
+        if (reducedMotion.matches) return;
+        for (const index of discarded) {
+          for (const dot of tiles[index].dots) {
+            if (dot.dataset.state === 'garbage') {
+              animations.push(dot.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 410, fill: 'forwards' }));
+            }
+          }
+        }
+      }
+
+      function evacuate() {
+        const current = stage;
+        const toSurvivor = liveObjects(current.young.filter(index => heap[index].role === 'eden'));
+        const toOld = liveObjects(current.sources.filter(index => heap[index].role !== 'eden'));
+        const needed = Math.ceil(toSurvivor.length / slots) + Math.ceil(toOld.length / slots);
+        const free = indices(area => area.role === 'free');
+        const released = indices(area => area.released);
+        const canCopy = free.length >= needed;
+        const placements = canCopy ? [...pack('survivor', toSurvivor, free), ...pack('old', toOld, free)] : [];
+        const type = current.old.length ? 'Mixed' : 'Young';
+        setEvent(type + ' pause in progress', canCopy ? 'Live dots move to destination tiles. Hollow dots fade as their source regions are reclaimed.' :
+          'The collector is trying to reserve space to copy live objects.', 'pause');
+        runPhase(reducedMotion.matches ? 400 : 780, () => {
+          recordPause(type, current.cost);
+          if (!canCopy) {
+            stage = { kind: 'full', retryExport: false };
+            setEvent('Evacuation failure · allocation', 'Live copies need ' + needed + ' destination regions. Only ' + free.length +
+              ' are free. This toy pause made no progress. Step to trigger Full GC.', 'pause');
+            return;
+          }
+          const collected = slotsOf(current.sources, 'garbage');
+          reclaimed = [...current.sources, ...released];
+          for (const index of reclaimed) {
+            heap[index] = empty();
+            candidates.delete(index);
+          }
+          applyPlacements(placements);
+          const exportCount = released.length / exportRegions;
+          recycled += collected + exportCount;
+          stage = null;
+          const timing = current.cost > current.goal ? ' (over the ' + current.goal + ' ms goal)' : '';
+          const exportNote = exportCount ? ' Reclaimed ' + exportCount + ' finished ' + (exportCount === 1 ? 'export' : 'exports') +
+            ' and freed ' + released.length + ' Humongous regions.' : '';
+          setEvent(type + ' pause complete · Java threads resumed',
+            collected + ' ordinary objects recycled. ' + current.sources.length + ' source regions freed and ' + destinations.length +
+            ' destinations used. Modeled pause ' + current.cost + ' ms' + timing + '.' + exportNote, 'pause');
+          if (current.goal === 200 && current.old.length === 4) {
+            completeMission('mixed', current.old.map(name).join(', ') + ' selected.');
+          }
+          if (resetByLearner && current.goal === 50 && current.old.length === 1 && current.cost === 66) {
+            completeMission('soft', '36 ms young + 30 ms Old = 66 ms.');
+          }
+        });
+        if (canCopy) animateCopies(placements, [...current.sources, ...released]);
+      }
+
+      function allocateREST() {
+        clearHighlights();
+        const available = indices(area => area.role === 'free').slice(0, 3);
+        for (const index of available) heap[index] = region('eden', 1, 6);
+        const eden = indices(area => area.role === 'eden').length;
+        if (eden >= 12 || available.length < 3) {
+          if (eden || heap.some(area => area.role === 'survivor')) {
+            beginEvacuation(false, 'REST traffic put pressure on Eden.');
+          } else {
+            stage = { kind: 'full', retryExport: false };
+            setEvent('REST allocation stalled', 'No free regions or young collection set are available. Step to compact the heap.', 'pause');
+          }
+          return;
+        }
+        setEvent('REST burst allocated in Eden', 'Three free regions became Eden. Most objects from these completed lookup requests are already unreachable.');
+      }
+
+      function exportStart() {
+        let run = 0;
+        for (const [index, area] of heap.entries()) {
+          run = area.role === 'free' ? run + 1 : 0;
+          if (run === exportRegions) return index - exportRegions + 1;
+        }
+        return -1;
+      }
+
+      function allocateExport(retrying) {
+        const start = exportStart();
+        if (start === -1) {
+          const free = indices(area => area.role === 'free').length;
+          if (retrying) {
+            setEvent('Export still cannot fit', 'After compaction, ' + free + ' free regions remain with no run of three. This model stops the allocation here. HotSpot can make further last-resort attempts before an out-of-memory error.', 'full');
+          } else {
+            stage = { kind: 'full', retryExport: true };
+            setEvent('Export allocation stalled', free + ' free regions, with no run of three. Step to see the Full GC fallback when ordinary recovery cannot make the run available.', 'pause');
+          }
+          return;
+        }
+        const exportId = 1 + Math.max(0, ...heap.map(area => area.exportId || 0));
+        for (let part = 1; part <= exportRegions; part++) {
+          heap[start + part - 1] = { ...region('humongous', 0), exportId, part };
+        }
+        reclaimed = reclaimed.filter(index => index < start || index >= start + exportRegions);
+        setEvent(retrying ? 'Full GC complete · export retry succeeded' : 'Humongous allocation succeeded',
+          name(start) + '–' + name(start + exportRegions - 1) + ' hold one live 8 MiB byte array. Its header spills into the third region, whose spare space stays reserved.', retrying ? 'full' : '');
+      }
+
+      function finishExports() {
+        clearHighlights();
+        const inFlight = indices(area => area.role === 'humongous' && !area.released);
+        for (const index of inFlight) heap[index].released = true;
+        if (inFlight.length) {
+          setEvent('Exports finished · arrays now unreachable', 'The requests dropped their last references. The H tiles turn hollow and remain reserved. Run Young GC, then Step or Play to reclaim them. An array still held by a cache or queue would stay live.');
+        } else {
+          setEvent('No in-flight exports to finish', 'Allocate an 8 MB JSON array to see the effect of releasing the last reference.');
+        }
+      }
+
+      function loadSpike() {
+        heap = Array.from({ length: regionCount }, (_, index) => index % 2 ? empty() : region('old', 5, 2));
+        candidates.clear();
+        recycled = 0;
+        fullCount = 0;
+        spikeLoaded = true;
+        clearHighlights();
+        setEvent('Traffic spike · fragmented heap loaded', 'This scenario has 24 free regions, with an Old region between each pair. There is no marked Old collection set ready. Try the 8 MB export.');
+      }
+
+      function compact() {
+        const retryExport = stage.retryExport;
+        const released = indices(area => area.released);
+        const movable = indices(area => area.role !== 'humongous' || area.released);
+        const used = movable.filter(index => heap[index].role !== 'free');
+        const placements = pack('old', liveObjects(used), [...movable]);
+        const cost = 740 + 4 * used.length;
+        stage.sources = used;
+        setEvent('Full GC · compacting the heap', 'Live ordinary objects bunch together, opening a longer run of free regions. Active Humongous arrays stay in place in this model.', 'full');
+        runPhase(reducedMotion.matches ? 450 : 780, () => {
+          recycled += slotsOf(used, 'garbage') + released.length / exportRegions;
+          for (const index of movable) heap[index] = empty();
+          applyPlacements(placements);
+          reclaimed = used.filter(index => heap[index].role === 'free');
+          candidates.clear();
+          recordPause('Full', cost);
+          fullCount++;
+          stage = { kind: 'resume', retryExport };
+          setEvent('Full GC #' + fullCount + ' · compaction complete', 'Live ordinary objects now fit in ' + destinations.length +
+            ' Old regions. Modeled pause ' + cost + ' ms. ' +
+            (retryExport ? 'Step again to resume requests and retry the export.' : 'Step again to resume requests.'), 'full');
+        });
+        animateCopies(placements, used);
+      }
+
+      function advance() {
+        if (!stage || phaseTimer !== null) return;
+        switch (stage.kind) {
+          case 'evacuate':
+            evacuate();
+            break;
+          case 'full':
+            compact();
+            break;
+          case 'resume': {
+            const retryExport = stage.retryExport;
+            stage = null;
+            if (retryExport) {
+              const hasRoom = exportStart() !== -1;
+              allocateExport(true);
+              if (spikeLoaded && hasRoom) completeMission('full', history.at(-1).ms + ' ms Full GC, then the export fit.');
+            }
+            else setEvent('Full GC complete · Java threads resumed', 'The lab leaves all remaining live data in Old or Humongous regions. Reset to restore the marked-heap example.', 'full');
+            break;
+          }
+        }
+        if (!stage) cancelPlayback();
+        render();
+      }
+
+      function action(button, run) {
+        button.addEventListener('click', () => {
+          if (stage) return;
+          run();
+          render();
+        });
+      }
+
+      action(buttons.traffic, allocateREST);
+      action(buttons.export, () => {
+        clearHighlights();
+        allocateExport(false);
+      });
+      action(buttons.finish, finishExports);
+      action(buttons.mark, beginMark);
+      action(buttons.young, () => beginEvacuation(false, 'G1 collects the young regions and can reclaim eligible finished exports.'));
+      action(buttons.mixed, () => {
+        if (candidates.size) beginEvacuation(true, 'Old candidates are ranked by garbage in this model.');
+        else beginEvacuation(false, 'No marked Old candidates remain. This pause collects young regions only.');
+      });
+      action(buttons.spike, loadSpike);
+      get('reset').addEventListener('click', () => {
+        resetByLearner = true;
+        reset();
+      });
+      buttons.step.addEventListener('click', () => {
+        if (timer === null) advance();
+      });
+      buttons.play.addEventListener('click', () => {
+        if (!stage || stage.kind === 'mark') return;
+        if (timer !== null) {
+          cancelPlayback();
+        } else if (phaseTimer === null) {
+          timer = setInterval(advance, 1100);
+          advance();
+        }
+        render();
+      });
+      slider.addEventListener('input', () => {
+        if (stage?.kind === 'evacuate' && phaseTimer === null) planEvacuation(stage.mixed);
+        render();
+      });
+      picker.addEventListener('change', () => {
+        inspected = Number(picker.value);
+        renderMap();
+      });
+
+      for (const tokens of document.querySelectorAll('.tokens')) {
+        const notes = [...tokens.querySelectorAll('button')];
+        const help = document.createElement('span');
+        const prompt = 'Focus, hover, or select a field to read it.';
+        help.className = 'token-help';
+        help.setAttribute('role', 'status');
+        help.textContent = prompt;
+        let selected = null;
+        tokens.after(help);
+        for (const token of notes) {
+          token.setAttribute('aria-pressed', 'false');
+          const explain = () => { help.textContent = token.dataset.note; };
+          const restore = () => {
+            const active = notes.includes(document.activeElement) ? document.activeElement : selected;
+            help.textContent = active?.dataset.note || prompt;
+          };
+          token.addEventListener('mouseenter', explain);
+          token.addEventListener('mouseleave', restore);
+          token.addEventListener('focus', explain);
+          token.addEventListener('blur', restore);
+          token.addEventListener('click', () => {
+            selected = token;
+            for (const note of notes) note.setAttribute('aria-pressed', String(note === selected));
+            explain();
+          });
+        }
+        tokens.hidden = false;
+      }
+
+      for (const question of document.querySelectorAll('.question')) {
+        const options = question.querySelector('.quiz-options');
+        const choices = [...options.querySelectorAll('button')];
+        const answer = question.querySelector('.answer');
+        const explanation = answer.querySelector('p').textContent;
+        const feedback = question.querySelector('.feedback');
+        for (const choice of choices) {
+          choice.setAttribute('aria-pressed', 'false');
+          choice.addEventListener('click', () => {
+            for (const button of choices) button.setAttribute('aria-pressed', String(button === choice));
+            const correct = choice.dataset.correct === 'true';
+            feedback.dataset.correct = String(correct);
+            feedback.textContent = correct ? 'Correct. ' + explanation : 'Hint. ' + question.dataset.hint;
+            answer.hidden = correct;
+          });
+        }
+        options.hidden = false;
+      }
+
+      reset();
+      get('experiments').hidden = false;
+      get('interactive-lab').hidden = false;
+    })();
+  </script>
+</body>
+</html>
